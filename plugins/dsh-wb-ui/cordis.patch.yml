@@ -1,0 +1,4 @@
+# workbench bundle patch: webui injection (tapIndex) for the workbench only
+- insert:
+    - id: wb-ui
+      name: 'dsh-wb-ui'

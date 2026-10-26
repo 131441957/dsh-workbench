@@ -1,0 +1,15 @@
+{
+  "name": "dsh-wb-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Workbench webui injection: taps index.html and injects ui/workbench.css + ui/workbench.js (never touches the install)",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "files": ["index.js", "cordis.patch.yml"],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" }
+  }
+}

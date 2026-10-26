@@ -143,3 +143,14 @@ java        缺失
 - 面板：左侧会话列表（运行中标记、10 秒自动刷新）、右侧历史（最近 50 条文本消息）、底部发送（排队 queue / 插入 steer）。
 - 注意：发送 = 往主驾那个会话投递一条用户消息，**会让它开始运行**（会消耗 token）。
 - 依赖：`wb.py` 的 supervisor 现在每轮都刷新 `state\main-status.json`，工作台靠它拿到主驾端口。
+
+## webui 注入（tapIndex，2026-10-26 完成）
+
+- 插件 `dsh-wb-ui`（只挂工作台）用 `webServer.tapIndex(html => html)` 纯字符串改写 index：
+  把 `ui\workbench.css` 注入到 `</head>` 前（`<style id="wb-ui-css">`），`ui\workbench.js` 注入到 `</body>` 前（`<script id="wb-ui-js">`）。
+- **每次请求都重新读文件** → 改 css/js 后刷新页面即生效，不用重启、不用重建。
+- **不碰安装目录**：删掉/改名 ui 文件 → 下次请求就没有注入（已实测）；停用插件同样。
+- 状态接口：`GET /wb-ui` 返回 uiDir、两个文件的大小与 mtime、以及 index 渲染次数。
+- 实测：注入出现在 head；改 css 后页面立刻含新内容；把 css 改名 `.off` 后页面立即无注入；改回即恢复；测试探针已清除。
+- 能改：颜色/字体/圆角/间距、隐藏元素、浮层角标、全局脚本。
+  不能改：新增页面、替换整体布局（那要客户端插件）。
