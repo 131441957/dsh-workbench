@@ -988,6 +988,31 @@ def _backup_entries() -> list[tuple[Path, str]]:
     return out
 
 
+def write_backup_readme() -> None:
+    """在 backups\\README.md 里维护一份快照清单（名字/时间/备注/文件数），方便人看。"""
+    items = sorted(BACKUP_ROOT.glob("snapshot-*.zip"), key=lambda p: p.stat().st_mtime, reverse=True) if BACKUP_ROOT.exists() else []
+    lines = ["# 快照清单（自动生成）", "", "由 `wb.py backup` 写入；`wb.py restore --from <文件名>` 还原。", "",
+             "| 快照 | 时间 | 文件数 | 备注 |", "|---|---|---|---|"]
+    for p in items:
+        note = ""
+        count = 0
+        try:
+            with zipfile.ZipFile(p) as zf:
+                meta = json.loads(zf.read("MANIFEST.json").decode("utf-8"))
+                note = meta.get("note", "")
+                count = meta.get("fileCount", 0)
+        except Exception:
+            pass
+        stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(p.stat().st_mtime))
+        safe_note = note.replace("|", "\\|")
+        lines.append(f"| `{p.name}` | {stamp} | {count} | {safe_note} |")
+    lines += ["", f"运行时备份：`backups\\app-*`（`wb.py rollback` 秒回）", ""]
+    try:
+        (BACKUP_ROOT / "README.md").write_text("\n".join(lines), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def cmd_backup(note: str = "") -> int:
     """完整快照（含安装器/工具链），并回读校验每个文件的 sha256。"""
     head("完整快照")
@@ -1049,6 +1074,7 @@ def cmd_backup(note: str = "") -> int:
         bad(f"校验失败 {len(bad_files)} 个：{', '.join(bad_files[:5])}")
         return 1
     ok("回读校验通过（每个文件的 sha256 都对上了）")
+    write_backup_readme()
     info(f"回滚：wb.py restore --from {archive.name}")
     return 0
 
@@ -1070,6 +1096,7 @@ def cmd_backups() -> int:
         except Exception:
             pass
         info(f"{p.name}  {p.stat().st_size / 1024:.1f} KB  {time.strftime('%Y-%m-%d %H:%M', time.localtime(p.stat().st_mtime))}  {note}")
+    write_backup_readme()
     return 0
 
 
@@ -1088,6 +1115,13 @@ def cmd_restore(target: str = "latest") -> int:
         bad(f"找不到快照：{archive}")
         return 1
     info(f"使用 {archive.name}")
+    # 旧快照会把后续代码一起倒回去，先提醒
+    try:
+        newest = sorted(BACKUP_ROOT.glob("snapshot-*.zip"), key=lambda p: p.stat().st_mtime)[-1]
+        if newest.name != archive.name:
+            warn(f"这不是最新快照（最新是 {newest.name}）：还原会把此后的改动一起回滚")
+    except Exception:
+        pass
 
     with zipfile.ZipFile(archive) as zf:
         manifest = json.loads(zf.read("MANIFEST.json").decode("utf-8"))
