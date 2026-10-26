@@ -134,3 +134,12 @@ java        缺失
 - `wb.py backups` 列出快照；`wb.py restore --from <zip|latest>` 还原：先停工作台 → 把当前状态另存 `backups\before-restore-<时间>` → 解包 → 复原 profile → 跑 install。
 - **坑**：快照比修改旧时，restore 会把**代码也回滚**（本会话就被回滚掉了刚加的排除规则）。所以修完代码要重做基线，旧快照该删就删。
 - 运行时另有一份完整备份：`backups\app-0.2.1-alpha.1-*`（10009 文件 / 1691MB），`wb.py rollback` 可秒回。
+
+## 会话视图（2026-10-26 新增，需求：主驾会话在工作台里看 + 能发消息）
+
+- **数据永远在主驾**：工作台不落盘、不复制会话。
+- 链路：工作台面板 → `/wb-sessions/*`（工作台代理）→ 主驾桥 `/wb-bridge/session*` → `sessionController` 的 `list / page / prompt`。
+- 安全：会话路由必须带 `x-wb-token`，token 由主驾桥启动时生成并写到 `state\bridge-token.txt`，工作台读取后带上；普通网页/其它进程无法伪造。
+- 面板：左侧会话列表（运行中标记、10 秒自动刷新）、右侧历史（最近 50 条文本消息）、底部发送（排队 queue / 插入 steer）。
+- 注意：发送 = 往主驾那个会话投递一条用户消息，**会让它开始运行**（会消耗 token）。
+- 依赖：`wb.py` 的 supervisor 现在每轮都刷新 `state\main-status.json`，工作台靠它拿到主驾端口。
