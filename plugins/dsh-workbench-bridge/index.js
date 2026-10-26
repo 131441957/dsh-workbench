@@ -151,8 +151,11 @@ async function sessionPage(ctx, sessionId, maxMessages) {
     const event = record?.event
     if (!event) continue
     if (!['user/message', 'assistant/message', 'system/message'].includes(event.type)) continue
-    const message = event.data?.message ?? {}
-    const text = (message.content ?? [])
+    const data = event.data ?? {}
+    // assistant/system 是 { message: { role, content } }，user 直接是 { role, content }（实测差异）
+    const message = data.message ?? data
+    const blocks = Array.isArray(message.content) ? message.content : []
+    const text = blocks
       .filter((block) => block && block.type === 'text' && typeof block.text === 'string')
       .map((block) => block.text)
       .join('\n')
@@ -162,7 +165,7 @@ async function sessionPage(ctx, sessionId, maxMessages) {
       seq: event.seq,
       time: event.time,
       type: event.type,
-      role: message.role ?? null,
+      role: message.role ?? (event.type === 'user/message' ? 'user' : null),
       text: text.length > 4000 ? text.slice(0, 4000) + '…' : text,
     })
   }
