@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import queue
 import subprocess
@@ -154,34 +155,37 @@ class App:
 
     def refresh_status(self) -> None:
         def work() -> None:
-            data = probe_status().get("text", "")
-            main_v = self._grab(data, "主 harness   ")
-            wb_v = self._grab(data, "工作台       ")
-            port = "在听" if "59430 在听" in data else "未启动"
-            wd = "运行中" if "看门狗      运行中" in data else "未运行"
-            sup = "运行中" if "运行中 pid=" in data and "自动伴随" in data else "未知"
-            self.root.after(0, lambda: self._apply(main_v, wb_v, port, wd, sup))
+            try:
+                proc = subprocess.run([python_console(), str(WB_PY), "info"], capture_output=True, text=True,
+                                      encoding="utf-8", errors="replace", timeout=90, creationflags=0x08000000)
+                lines = [ln for ln in (proc.stdout or "").splitlines() if ln.strip().startswith("{")]
+                data = json.loads(lines[-1]) if lines else {"error": "info 没有输出 JSON"}
+            except Exception as exc:  # noqa: BLE001
+                data = {"error": f"读取状态失败：{exc}"}
+            self.root.after(0, lambda: self._apply(data))
         threading.Thread(target=work, daemon=True).start()
 
-    @staticmethod
-    def _grab(text: str, prefix: str) -> str:
-        for line in text.splitlines():
-            if line.strip().startswith(prefix.strip()):
-                return line.strip().replace(prefix.strip(), "").strip()
-        return "?"
-
-    def _apply(self, main_v: str, wb_v: str, port: str, wd: str, sup: str) -> None:
-        self.version_label.config(text=f"主驾 {main_v}   ·   工作台 {wb_v}")
-        self.detail_label.config(text=f"59430：{port}   看门狗：{wd}   自动伴随：{sup}")
-        cfg_path = WB_ROOT / "config.json"
-        try:
-            import json as _json
-            cfg = _json.loads(cfg_path.read_text(encoding="utf-8-sig"))
-            self.paths_label.config(
-                text=f"主驾安装：{cfg.get('install', '?')}（{cfg.get('installSource', '?')}）   "
-                     f"数据：{cfg.get('home', '?')}（{cfg.get('homeSource', '?')}）")
-        except Exception:
-            self.paths_label.config(text="路径未探测：点「重新探测路径」")
+    def _apply(self, d: dict) -> None:
+        if d.get("error"):
+            self.version_label.config(text="状态读取失败")
+            self.detail_label.config(text=d["error"])
+            self.paths_label.config(text="")
+            return
+        m = d.get("main", {})
+        w = d.get("workbench", {})
+        mv = m.get("version", "?")
+        wv = w.get("version", "?")
+        same = mv == wv
+        self.version_label.config(
+            text=f"主驾 harness {mv}   ·   工作台 {wv}" + ("" if same else "   ⚠️ 版本不一致，建议「同步运行时」"))
+        port = "在听" if w.get("listening") else "未启动"
+        wd = "运行中" if w.get("watchdog") else "未运行"
+        sup = "运行中" if w.get("supervisors") else "未运行"
+        mports = ",".join(str(p) for p in (m.get("ports") or [])) or "未检测到"
+        self.detail_label.config(text=f"59430：{port}   看门狗：{wd}   自动伴随：{sup}   主驾端口：{mports}")
+        self.paths_label.config(
+            text=f"主驾安装：{m.get('install', '?')}（{m.get('installSource', '?')}）   "
+                 f"数据：{m.get('home', '?')}（{m.get('homeSource', '?')}）")
 
 
 def selftest() -> int:

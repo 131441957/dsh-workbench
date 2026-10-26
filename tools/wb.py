@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """wb.py — DSH 工作台（Workbench）工具链 v0.2
 
 只用标准库。工具用 Python，DSH 插件仍必须用 JS（Cordis 加载器只认 JS）。
@@ -810,6 +810,40 @@ def cmd_install(force: bool = False) -> int:
     return 0
 
 
+def cmd_info() -> int:
+    """机器可读状态（给 GUI / 脚本用）。"""
+    cfg = {}
+    try:
+        cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
+    except Exception:
+        cfg = {}
+    wd = int(read_pids().get("watchdog") or 0)
+    sup = int(read_pids().get("supervisor") or 0)
+    data = {
+        "workbenchRoot": str(WB_ROOT),
+        "main": {
+            "install": str(MAIN_INSTALL),
+            "installSource": cfg.get("installSource", "?"),
+            "installValid": valid_install(MAIN_INSTALL),
+            "home": str(MAIN_HOME),
+            "homeSource": cfg.get("homeSource", "?"),
+            "version": main_version(),
+            "ports": main_harness_ports(),
+        },
+        "workbench": {
+            "version": app_version(),
+            "installed": APP_DSH_CMD.exists(),
+            "port": WB_PORT,
+            "listening": port_open(WB_PORT),
+            "watchdog": wd if (wd and pid_alive(wd)) else 0,
+            "supervisor": sup if (sup and pid_alive(sup)) else 0,
+            "supervisors": find_supervisors(),
+        },
+    }
+    print(json.dumps(data, ensure_ascii=False))
+    return 0
+
+
 def cmd_compat() -> int:
     """版本/兼容性视角：主驾 vs 工作台 vs 插件声明的 peer 版本。"""
     head("版本")
@@ -1408,6 +1442,7 @@ def main(argv: list[str]) -> int:
         "resume": lambda: cmd_resume(),
         "install": lambda: cmd_install(args.force),
         "paths": lambda: cmd_paths(args.redetect, args.install or None, args.home or None),
+        "info": lambda: cmd_info(),
         "rollback": lambda: cmd_rollback(),
         "sync-app": lambda: cmd_sync_app(args.force),
         "start": lambda: cmd_start(args.with_watchdog),
