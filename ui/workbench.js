@@ -66,7 +66,7 @@
   }
 
   // ── 2) 隐藏用不到的原版入口 + 静音无 agent 的报错 toast ───────────────
-  const HIDE_TEXTS = ['插件', '自动化任务', '工作区', '默认工作区', '新会话']
+  const HIDE_TEXTS = ['自动化任务', '工作区', '默认工作区', '新会话']
   const SILENCE_TEXTS = ['新建会话失败', 'no agent factory', 'gateway/internal failed']
 
   const hide = (el) => {
@@ -82,6 +82,7 @@
     state.sweeps += 1
     attachStyle()
     for (const node of document.querySelectorAll('button, a, [role="button"], [role="listitem"], li, div, span')) {
+      if (node.closest('#wb-topbar')) continue // 别把自己顶栏的按钮隐藏了
       const text = textOf(node)
       if (!text || text.length > 24) continue
       if (SILENCE_TEXTS.some((n) => text.includes(n))) {
@@ -92,7 +93,9 @@
   }
 
   // ── 3) 把侧栏藏起来，换成顶部导航 ────────────────────────────────────
-  const TABS = ['接口浏览器', '主驾会话', '设置']
+  // 顶栏标签 → 原侧栏里的同名入口（隐藏元素也可被 click 触发）
+  const DEFAULT_PANEL = '状态'
+  const TABS = ['主驾会话', '插件', '状态', '设置']
 
   const findButton = (text) =>
     Array.from(document.querySelectorAll('button, a, [role="button"]')).find((el) => textOf(el) === text)
@@ -193,22 +196,22 @@
     }
     buildTopbar()
     reserveTopSpace()
-    if (!state.activeMarked && findButton('接口浏览器')) {
+    if (!state.activeMarked && findButton(DEFAULT_PANEL)) {
       state.activeMarked = true
-      markActive('接口浏览器')
+      markActive(DEFAULT_PANEL)
     }
   }
 
-  // ── 4) 默认打开「接口浏览器」───────────────────────────────────────
+  // ── 4) 默认打开「状态」（工作台核心面板，不再单列成工具入口）──────────
   let defaulted = false
   const openDefault = () => {
     if (defaulted) return
     if (!/选择工作区|探索未至之境/.test(document.body ? document.body.innerText : '')) return
-    const btn = findButton('接口浏览器')
+    const btn = findButton(DEFAULT_PANEL)
     if (!btn) return
     defaulted = true
     btn.click()
-    markActive('接口浏览器')
+    markActive(DEFAULT_PANEL)
   }
 
   // ── 5) 启动 ────────────────────────────────────────────────────────

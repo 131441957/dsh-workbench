@@ -9,7 +9,7 @@
 - id: ui-schedule
   disabled: true
 - id: ui-plugin-manager
-  disabled: true
+  disabled: false
 # 预览版说明的已读版本（volatile 字段，只能放包补丁；用户补丁层会被应用重写抹掉）
 - id: ui-settings-general
   name: "@deepseek-ai/dsh-client-ui-settings-general"

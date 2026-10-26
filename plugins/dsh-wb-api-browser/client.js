@@ -200,7 +200,7 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { style: styles.header },
-          h('span', { style: styles.title }, '接口浏览器 v2'),
+          h('span', { style: styles.title }, '工作台状态 v2'),
           h('span', { style: styles.badge }, live ? `DSH ${live.version}` : '未采集'),
           TABS.map((t) =>
             h(
@@ -260,7 +260,7 @@ window.__ModuleLoader__.load({
       apply(ctx) {
         ctx.slots.inject('sidebar.panellist', () =>
           ctx.slots.register(
-            { name: 'sidebar.panellist', id: 'wb-api', order: 40, label: () => '接口浏览器' },
+            { name: 'sidebar.panellist', id: 'wb-api', order: 40, label: () => '状态' },
             Icon,
           ),
         )
