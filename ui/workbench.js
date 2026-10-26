@@ -357,6 +357,18 @@
   const REMOVE_SETTINGS = ['权限', '工作步骤展示', '显示代码工作视图', '显示代码工作图宽', '快捷键', '繁忙时的发送行为', '性能与用量']
   const KEEP_NAV = ['通用设置']
 
+  // 精确找“行容器”：类名必须以 _row/_group/_setting 结尾（不能用 *="_row"，
+  // 那会匹配到 _rowText / _rowTitle 这类文字容器，结果是把文字藏了、行还留着）
+  const findRowContainer = (el) => {
+    let node = el
+    for (let depth = 0; depth < 6 && node; depth += 1) {
+      const cls = String(node.className || '')
+      if (/(^|\s)[\w-]+_(row|group|setting)(\s|$)/.test(cls)) return node
+      node = node.parentElement
+    }
+    return null
+  }
+
   const pruneSettings = () => {
     const overlay = document.querySelector('.ZCYAFq_overlay')
     if (!overlay) return
@@ -364,15 +376,21 @@
     for (const el of overlay.querySelectorAll('div[class*="_title"], div[class*="_settingTitle"]')) {
       const text = (el.textContent || '').trim()
       if (!REMOVE_SETTINGS.includes(text)) continue
-      const row = el.closest('div[class*="_row"], div[class*="_group"], div[class*="_setting"]')
+      const row = findRowContainer(el)
       if (row) { row.classList.add('wb-hidden'); hidden += 1 }
     }
-    // data-slot 包裹的项（目前只有「权限」这类走 settings.general.item 的）
-    for (const item of overlay.querySelectorAll('[data-slot="settings.general.item"]')) {
-      const title = (item.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 10)
-      const keep = KEEP_SETTINGS.some((k) => title.startsWith(k))
-      if (!keep) item.classList.add('wb-hidden')
+    // 直接遍历设置区里的每一行，按“行文本以标题开头”兜底（有些行没有 _row 类名）
+    const section = overlay.querySelector('.JZe3aa_section') || overlay.querySelector('.ZCYAFq_options')
+    if (section) {
+      for (const child of section.children) {
+        const text = (child.textContent || '').replace(/\s+/g, ' ').trim()
+        // only short row text: the wrapper containing every row is long, never hide it
+        if (text.length < 160 && REMOVE_SETTINGS.some((k) => text.startsWith(k))) { child.classList.add('wb-hidden'); hidden += 1 }
+      }
     }
+    // 注意：[data-slot=settings.general.item] 只有一个，且包住整个通用设置区，
+    // 绝不能按它的文字判断——那会把整块内容一起藏掉（踩过）。逐项隐藏只靠上面的标题匹配。
+
     for (const cell of overlay.querySelectorAll('.ZCYAFq_navCell')) {
       const text = (cell.textContent || '').replace(/\s+/g, ' ').trim()
       cell.classList.toggle('wb-hidden', !KEEP_NAV.includes(text))
@@ -381,6 +399,24 @@
       actions.classList.add('wb-hidden') // “打开配置文件”，工作台用不上
     }
     state.settingsHidden = hidden
+    if (state.diagSent) return
+    state.diagSent = true
+    try {
+      const probe = []
+      for (const el of overlay.querySelectorAll('div[class*="_title"], div[class*="_settingTitle"]')) {
+        const tx = (el.textContent || '').trim()
+        if (!REMOVE_SETTINGS.includes(tx)) continue
+        const row = findRowContainer(el)
+        probe.push({ title: tx, cls: String(el.className), rowCls: row ? String(row.className) : null, rowHidden: row ? row.classList.contains('wb-hidden') : null })
+      }
+      const titles = Array.from(overlay.querySelectorAll('div[class*="_title"], div[class*="_settingTitle"]'))
+        .map((el) => (el.textContent || '').trim()).filter(Boolean).slice(0, 40)
+      fetch('/wb-ui/dom', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'html', name: 'diag.json', html: JSON.stringify({ titles, hidden, probe, removeList: REMOVE_SETTINGS }) }),
+      }).catch(() => {})
+    } catch (e) { /* ignore */ }
   }
   window.__wbPruneSettings = pruneSettings
 
