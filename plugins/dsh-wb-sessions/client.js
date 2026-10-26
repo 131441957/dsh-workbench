@@ -155,7 +155,16 @@ window.__ModuleLoader__.load({
       root: { display: 'flex', height: '100%', minHeight: 0, background: 'var(--dsw-alias-bg-base)', color: 'var(--dsw-alias-label-primary)', font: 'inherit' },
       left: { width: 290, flex: '0 0 auto', borderRight: '1px solid var(--dsw-alias-border-secondary)', display: 'flex', flexDirection: 'column', minHeight: 0 },
       leftHead: { padding: '8px 10px', borderBottom: '1px solid var(--dsw-alias-border-secondary)', display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'nowrap', minWidth: 0 },
-      liveRow: { padding: '5px 10px 6px', fontSize: 10, color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', borderBottom: '1px solid var(--dsw-alias-border-secondary)' },
+      controls: { display: 'flex', gap: 6, padding: '6px 8px', borderBottom: '1px solid var(--dsw-alias-border-secondary)' },
+      search: { flex: '1 1 auto', minWidth: 0, padding: '3px 6px', fontSize: 11, borderRadius: 6, border: '1px solid var(--dsw-alias-border-secondary)', background: 'var(--dsw-alias-bg-base)', color: 'var(--dsw-alias-label-primary)', font: 'inherit' },
+      sortSelect: { flex: '0 0 auto', padding: '2px 4px', fontSize: 11, borderRadius: 6, border: '1px solid var(--dsw-alias-border-secondary)', background: 'var(--dsw-alias-bg-secondary)', color: 'var(--dsw-alias-label-primary)', font: 'inherit' },
+      group: { display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px 4px', position: 'sticky', top: 0, background: 'var(--dsw-alias-bg-base)', zIndex: 1 },
+      groupName: { fontSize: 10.5, fontWeight: 600, color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+      groupCount: { fontSize: 10, color: 'var(--dsw-alias-label-secondary)', opacity: 0.7, flex: '0 0 auto' },
+      itemTop: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 },
+      dot: { width: 6, height: 6, borderRadius: 3, background: 'var(--dsw-alias-border-secondary)', flex: '0 0 auto' },
+      itemTitle: { fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: '1 1 auto', minWidth: 0 },
+      itemTime: { fontSize: 10, color: 'var(--dsw-alias-label-secondary)', flex: '0 0 auto' },      liveRow: { padding: '5px 10px 6px', fontSize: 10, color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', borderBottom: '1px solid var(--dsw-alias-border-secondary)' },
       title: { fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, flex: '0 1 auto' },
       badge: { fontSize: 10, padding: '1px 6px', borderRadius: 8, background: 'var(--dsw-alias-bg-secondary)', color: 'var(--dsw-alias-label-secondary)', flex: '0 0 auto' },
       list: { flex: 1, overflow: 'auto', minHeight: 0 },
@@ -201,8 +210,37 @@ window.__ModuleLoader__.load({
       return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
     }
 
-    function fmtTime(ms) {
-      if (!ms) return ''
+    // 会话显示名：优先用 cwd 末段，否则用 id 短号
+    function sessionLabel(s) {
+      const tail = String(s.cwd || '').split(/[\\/]/).filter(Boolean).slice(-1)[0]
+      if (tail) return tail
+      return s.sessionId.replace('session-', '').slice(0, 8)
+    }
+
+    // 分组：按工作区（cwd 末段）分组；组内按排序模式排序
+    function buildGroups(items, mode, needle) {
+      const q = needle ? needle.toLowerCase() : ''
+      const list = items.filter((s) => !q
+        || (s.cwd || '').toLowerCase().includes(q)
+        || s.sessionId.toLowerCase().includes(q))
+      const sorted = list.slice().sort((a, b) => {
+        if (mode === 'running' && Boolean(a.running) !== Boolean(b.running)) return a.running ? -1 : 1
+        return (b.updatedAt || 0) - (a.updatedAt || 0)
+      })
+      if (mode === 'workspace') {
+        const map = new Map()
+        for (const s of sorted) {
+          const key = sessionLabel(s)
+          if (!map.has(key)) map.set(key, [])
+          map.get(key).push(s)
+        }
+        return Array.from(map.entries())
+          .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+          .map(([label, groupItems]) => ({ key: 'ws:' + label, label, items: groupItems }))
+      }
+      return [{ key: 'all', label: '全部会话', items: sorted }]
+    }
+    function fmtTime(ms) {      if (!ms) return ''
       const d = new Date(Number(ms))
       if (Number.isNaN(d.getTime())) return ''
       const diff = Date.now() - d.getTime()
@@ -249,6 +287,8 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = useState(false)
       const [hasToken, setHasToken] = useState(true)
       const [live, setLive] = useState(null)
+      const [query, setQuery] = useState('')
+      const [sortMode, setSortMode] = useState('recent')
       const listTimer = useRef(0)
       const bottomRef = useRef(null)
 
@@ -330,6 +370,8 @@ window.__ModuleLoader__.load({
         } catch (e) { setError(String(e.message || e)) } finally { setBusy(false) }
       }
 
+      const groups = useMemo(() => buildGroups(sessions, sortMode, query), [sessions, sortMode, query])
+
       const current = sessions.find((s) => s.sessionId === selected)
 
       return h('div', { style: styles.root, 'data-wb-panel': 'sessions' },
@@ -345,19 +387,45 @@ window.__ModuleLoader__.load({
                 + (live.workbench && typeof live.workbench.latencyMs === 'number' ? ' · ' + live.workbench.latencyMs + 'ms' : '')
               : '等待主驾事件流…',
           ),
+          h('div', { style: styles.controls },
+            h('input', {
+              style: styles.search,
+              placeholder: '过滤会话…',
+              value: query,
+              onChange: (e) => setQuery(e.target.value),
+            }),
+            h('select', {
+              value: sortMode,
+              onChange: (e) => setSortMode(e.target.value),
+              style: styles.sortSelect,
+            },
+              h('option', { value: 'recent' }, '最近活动'),
+              h('option', { value: 'workspace' }, '按工作区'),
+              h('option', { value: 'running' }, '运行优先'),
+            ),
+          ),
           h('div', { style: styles.list },
-            sessions.length === 0
-              ? h('div', { style: styles.notice }, '没有会话（主驾没开或还没会话）')
-              : sessions.map((s) => h('div', {
-                  key: s.sessionId,
-                  style: s.sessionId === selected ? { ...styles.item, ...styles.itemActive } : styles.item,
-                  onClick: () => setSelected(s.sessionId),
-                },
-                h('div', null,
-                  (s.cwd || '').split(/[\\/]/).filter(Boolean).slice(-1)[0] || '会话',
-                  s.running ? h('span', { style: { ...styles.badge, marginLeft: 6 } }, '运行中') : null),
-                h('div', { style: styles.itemSub }, `${s.sessionId.slice(0, 16)}… · ${fmtTime(s.updatedAt)}`),
-              )),
+            groups.length === 0
+              ? h('div', { style: styles.notice }, sessions.length === 0 ? '没有会话（主驾没开或还没会话）' : '没有匹配的会话')
+              : groups.map((g) => h('div', { key: g.key },
+                  h('div', { style: styles.group },
+                    h('span', { style: styles.groupName }, g.label),
+                    h('span', { style: styles.groupCount }, String(g.items.length)),
+                  ),
+                  g.items.map((s) => h('div', {
+                    key: s.sessionId,
+                    style: s.sessionId === selected ? { ...styles.item, ...styles.itemActive } : styles.item,
+                    onClick: () => setSelected(s.sessionId),
+                    title: s.sessionId + '\n' + (s.cwd || ''),
+                  },
+                    h('div', { style: styles.itemTop },
+                      h('span', { style: s.running ? { ...styles.dot, background: '#4caf50' } : styles.dot }),
+                      h('span', { style: styles.itemTitle }, sessionLabel(s)),
+                      h('span', { style: styles.itemTime }, fmtTime(s.updatedAt)),
+                    ),
+                    h('div', { style: styles.itemSub }, s.sessionId.replace('session-', '').slice(0, 8) + (s.blank ? ' · 空会话' : '')),
+                  )),
+                )),
           ),
         ),
         h('div', { style: styles.right },
