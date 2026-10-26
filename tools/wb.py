@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """wb.py — DSH 工作台（Workbench）工具链 v0.2
 
 只用标准库。工具用 Python，DSH 插件仍必须用 JS（Cordis 加载器只认 JS）。
@@ -919,6 +919,85 @@ def cmd_install(force: bool = False) -> int:
     return 0
 
 
+# 与主驾自带能力重复的工作台能力（登记表里要标出来，避免重复造轮子）
+DUPLICATE_WITH_MAIN = {
+    "/wb-web/search": "主驾自带 web_search / web_fetch",
+}
+
+
+def cmd_caps() -> int:
+    """列出工作台独有的能力（插件路由 + 工具命令），并标出与主驾重复的。只读。"""
+    head("工作台能力清单")
+    plugins_dir = WB_ROOT / "plugins"
+    rows = []
+    if plugins_dir.exists():
+        for pkg in sorted(plugins_dir.glob("*/package.json")):
+            d = pkg.parent
+            try:
+                meta = json.loads(pkg.read_text(encoding="utf-8-sig"))
+            except Exception:
+                continue
+            name = meta.get("name", d.name)
+            routes = set()
+            index = d / "index.js"
+            if index.exists():
+                text = index.read_text(encoding="utf-8", errors="replace")
+                # 常量前缀，例如 const PREFIX = '/wb-api'
+                consts = {}
+                for m in re.finditer(r"const\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*['\"`]([^'\"`]+)['\"`]", text):
+                    consts[m.group(1)] = m.group(2)
+                # 直接写死的路径
+                for m in re.finditer(r"path:\s*['\"`](/[^'\"`]+)['\"`]", text):
+                    routes.add(m.group(1))
+                # path: PREFIX 这类常量引用
+                for m in re.finditer(r"path:\s*([A-Za-z_][A-Za-z0-9_]*)", text):
+                    value = consts.get(m.group(1))
+                    if value and value.startswith("/"):
+                        routes.add(value)
+            has_client = (d / "client.js").exists()
+            declared = (((meta.get("dsh") or {}).get("workbench") or {}).get("capabilities") or [])
+            rows.append({
+                "name": name,
+                "version": meta.get("version", "?"),
+                "routes": sorted(routes),
+                "client": has_client,
+                "declared": [c.get("name") for c in declared if isinstance(c, dict)],
+            })
+
+    for r in rows:
+        info(f"{r['name']} v{r['version']}{'  +client' if r['client'] else ''}")
+        if not r["routes"]:
+            info("    路由：无（纯 UI 注入或空壳）")
+        for route in r["routes"]:
+            dup = None
+            for key, why in DUPLICATE_WITH_MAIN.items():
+                if key == route or key.startswith(route + "/") or route.startswith(key):
+                    dup = why
+                    break
+            if dup:
+                warn(f"    {route}  ← 与主驾重复（{dup}）")
+            elif r["name"] == "dsh-workbench-bridge":
+                info(f"    {route}  ← 主驾侧接入层（挂在主 profile，不算工作台独有能力）")
+            else:
+                ok(f"    {route}  ← 工作台独有")
+        if r["declared"]:
+            ok(f"    声明能力：{', '.join(r['declared'])}")
+
+    head("工具命令（wb.py，主驾进程没有）")
+    for name, desc in [
+        ("install / install --force", "安装或复制运行时"),
+        ("start / stop / restart / suspend / resume", "工作台进程与自动伴随"),
+        ("backup / backups / restore / rollback", "快照与运行时回滚"),
+        ("plugins list|add|remove", "工作台 profile 的插件管理（与主驾 plugin_manager 不同）"),
+        ("api / compat / info / paths / status / watch", "接口基线与状态"),
+    ]:
+        ok(f"{name:<42} {desc}")
+
+    info("提示：自研插件将来在 package.json 的 dsh.workbench.capabilities 里声明能力，")
+    info("      主驾即可按名字调用；现在没有自研插件，所以这张表以路由为主。")
+    return 0
+
+
 def cmd_info() -> int:
     """机器可读状态（给 GUI / 脚本用）。"""
     cfg = {}
@@ -1777,6 +1856,7 @@ def main(argv: list[str]) -> int:
         "install": lambda: cmd_install(args.force),
         "paths": lambda: cmd_paths(args.redetect, args.install or None, args.home or None),
         "info": lambda: cmd_info(),
+        "caps": lambda: cmd_caps(),
         "backup": lambda: cmd_backup(args.note),
         "backups": lambda: cmd_backups(),
         "restore": lambda: cmd_restore(args.from_archive),

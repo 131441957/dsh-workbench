@@ -216,3 +216,10 @@ java        缺失
 - `wb.py backup` 现在额外收 `home\storages\*.json`（目前只有 `workspace.json`，工作区注册表）。
 - **`.credentials.yaml` 永不入快照**（含 API Key）；工作台本身没有 sessions 数据（会话都在主驾）。
 - 最新基线：`snapshot-20261026-222656.zip`（45 文件 / 91.9 KB），旧快照继续保留。
+
+## 能力清单（wb.py caps，2026-10-26）
+
+- 定位：**只登记主驾没有的能力**，不重复造轮子。用户指出「这些能力不是harness就自带的吗」——所以 registry 只服务“工作台独有”。
+- `wb.py caps` 只读扫描 `plugins\*`：读 package.json（名字/版本/是否有 client.js）+ 解析 index.js 里的路由（支持 `const PREFIX` 常量引用）；对 `/wb-web` 标「与主驾 web_search / web_fetch 重复」，对 `dsh-workbench-bridge` 标「主驾侧接入层，不算工作台能力」。
+- wb.py 的 install/start/backup/restore/plugins/api 等命令也列为“工作台独有”（主驾进程做不到）。
+- 自研插件将来的声明位：`package.json` 的 `dsh.workbench.capabilities`（现在为空，因为没有自研插件）。
