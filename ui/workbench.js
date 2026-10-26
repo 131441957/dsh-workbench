@@ -93,9 +93,9 @@
   }
 
   // ── 3) 把侧栏藏起来，换成顶部导航 ────────────────────────────────────
-  // 顶栏标签分组：左侧（主驾会话 / 插件），右侧（状态 / 设置）
+  // 顶栏标签分组：左侧（Harness会话 / 插件），右侧（状态 / 设置）
   const TABS_LEFT = [
-    { label: '主驾会话', entry: '主驾会话' },
+    { label: 'Harness会话', entry: 'Harness会话' },
     { label: '插件', entry: '插件' },
   ]
   const TABS_RIGHT = [
@@ -103,7 +103,7 @@
     { label: '设置', entry: '设置' },
   ]
   const TABS = [...TABS_LEFT, ...TABS_RIGHT]
-  const DEFAULT_PANEL = '状态'
+  const DEFAULT_PANEL = 'Harness会话'
 
   const findButton = (text) =>
     Array.from(document.querySelectorAll('button, a, [role="button"]')).find((el) => textOf(el) === text)

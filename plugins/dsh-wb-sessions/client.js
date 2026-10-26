@@ -304,7 +304,7 @@ window.__ModuleLoader__.load({
       return h('div', { style: styles.root },
         h('div', { style: styles.left },
           h('div', { style: styles.leftHead },
-            h('span', { style: styles.title }, '主驾会话'),
+            h('span', { style: styles.title }, 'Harness 会话'),
             h('span', { style: styles.badge }, `${sessions.length}`),
             h('button', { type: 'button', style: { ...styles.btn, marginLeft: 'auto', padding: '2px 8px', fontSize: 11 }, onClick: loadList }, '刷新'),
           ),
@@ -361,7 +361,7 @@ window.__ModuleLoader__.load({
       __test__: { renderMarkdown },
       apply(ctx) {
         ctx.slots.inject('sidebar.panellist', () =>
-          ctx.slots.register({ name: 'sidebar.panellist', id: 'wb-sessions', order: 45, label: () => '主驾会话' }, Icon))
+          ctx.slots.register({ name: 'sidebar.panellist', id: 'wb-sessions', order: 45, label: () => 'Harness会话' }, Icon))
         ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: 'wb-sessions' }, Panel))
       },
     }
