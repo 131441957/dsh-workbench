@@ -340,6 +340,7 @@ window.__ModuleLoader__.load({
 
     return {
       inject: ['slots'],
+      __test__: { renderMarkdown },
       apply(ctx) {
         ctx.slots.inject('sidebar.panellist', () =>
           ctx.slots.register({ name: 'sidebar.panellist', id: 'wb-sessions', order: 45, label: () => '主驾会话' }, Icon))
