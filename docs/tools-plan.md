@@ -203,3 +203,10 @@ java        缺失
 - 生效写法：`.OSewFq_frame{display:flex!important;flex-direction:row!important}` + `.OSewFq_centerCol{flex:1 1 auto!important;width:auto!important;max-width:none!important}` + 隐藏 `sidebarCol / rightbarCol / handle`；顶栏留白用 `body{padding-top:46px}`。
 - 结果：centerCol 280 → **1228（满宽）**，面板标题行 y=46、内容 y=90..840，无遮挡无空白。
 - 验证手段：`POST /wb-ui/dom` 把真实 DOM（类名/坐标/尺寸）落到 `state\dom-snapshot.json`，改造前后各拍一张对照——比截图靠谱。
+
+## 接入升级：实时事件流（SSE，2026-10-26）
+
+- 主驾桥新增 `GET /wb-bridge/events`（需 `x-wb-token`）：`text/event-stream`，每 3 秒一帧 `event: tick`，载荷 `{at, workbench:{reachable,version,services,slots}, sessions:{count,running,latest[5]}}`；客户端断开即停止。
+- 工作台代理新增 `GET /wb-sessions/events`：带上 token 转发主驾的 SSE 流，浏览器断开时 abort 上游。
+- 会话面板改用 `EventSource('/wb-sessions/events')`：会话数或运行中数量变化时自动刷新列表与当前会话历史；SSE 未连上时退回 10 秒轮询。面板顶部显示「主驾 N 会话 · M 运行」。
+- 生效条件：桥是主驾侧的 host 代码 → **需要重启一次主程序**。重启前代理返回 404（上游还没有该路由）。

@@ -289,6 +289,49 @@ export function apply(ctx) {
         }
         return
       }
+      // 实时事件流（SSE）：工作台订阅它就能实时拿到主驾会话状态与工作台在线情况
+      if (url.pathname === `${PREFIX}/events`) {
+        if (!tokenOk(req)) { sendJson(res, 401, { ok: false, error: 'bad token' }); return }
+        res.writeHead(200, {
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-cache, no-transform',
+          connection: 'keep-alive',
+          'x-accel-buffering': 'no',
+        })
+        let alive = true
+        req.on('close', () => { alive = false })
+        const tick = async () => {
+          if (!alive) return
+          let payload
+          try {
+            const wb = await probe()
+            const sc = ctx.get('sessionController')
+            let sessions = null
+            if (sc) {
+              const value = await sc.list({}, AbortSignal.timeout(8000))
+              const items = value?.items ?? []
+              sessions = {
+                count: items.length,
+                running: items.filter((s) => s.running).length,
+                latest: items.slice(0, 5).map((s) => ({ id: s.sessionId, running: Boolean(s.running), at: s.updatedAt })),
+              }
+            }
+            payload = { at: Date.now(), workbench: wb, sessions }
+          } catch (error) {
+            payload = { at: Date.now(), error: String(error?.message ?? error) }
+          }
+          try {
+            res.write(`event: tick\ndata: ${JSON.stringify(payload)}\n\n`)
+          } catch {
+            alive = false
+            return
+          }
+          setTimeout(tick, 3000)
+        }
+        tick()
+        return
+      }
+
       sendJson(res, 404, { error: 'unknown endpoint' })
     }
     ctx.effect(() => server.register({ kind: 'prefix', path: PREFIX, handler }))

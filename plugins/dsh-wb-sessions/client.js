@@ -247,6 +247,7 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState('')
       const [busy, setBusy] = useState(false)
       const [hasToken, setHasToken] = useState(true)
+      const [live, setLive] = useState(null)
       const listTimer = useRef(0)
       const bottomRef = useRef(null)
 
@@ -275,8 +276,37 @@ window.__ModuleLoader__.load({
           } catch { /* 忽略 */ }
           await loadList()
         })()
-        listTimer.current = setInterval(loadList, 10000)
-        return () => clearInterval(listTimer.current)
+
+        // 优先用主驾推送的事件流（SSE）触发刷新；连不上再退回定时轮询
+        let source = null
+        let lastKey = ''
+        try {
+          source = new EventSource('/wb-sessions/events')
+          source.addEventListener('tick', (event) => {
+            try {
+              const data = JSON.parse(event.data)
+              setLive(data)
+              const key = `${data.sessions?.count ?? '?'}/${data.sessions?.running ?? '?'}`
+              if (key !== lastKey) {
+                lastKey = key
+                loadList()
+                if (selected) loadPage(selected)
+              }
+            } catch { /* 忽略坏帧 */ }
+          })
+          source.onerror = () => { /* 浏览器会自动重连 */ }
+        } catch {
+          source = null
+        }
+
+        listTimer.current = setInterval(() => {
+          if (!source || source.readyState !== 1) loadList()
+        }, 10000)
+
+        return () => {
+          clearInterval(listTimer.current)
+          if (source) source.close()
+        }
       }, [])
 
       useEffect(() => { if (selected) loadPage(selected) }, [selected])
@@ -306,7 +336,8 @@ window.__ModuleLoader__.load({
           h('div', { style: styles.leftHead },
             h('span', { style: styles.title }, 'Harness 会话'),
             h('span', { style: styles.badge }, `${sessions.length}`),
-            h('button', { type: 'button', style: { ...styles.btn, marginLeft: 'auto', padding: '2px 8px', fontSize: 11 }, onClick: loadList }, '刷新'),
+            live && live.sessions ? h('span', { style: { ...styles.badge, marginLeft: 'auto' } }, '主驾 ' + live.sessions.count + ' 会话 · ' + live.sessions.running + ' 运行') : null,
+            h('button', { type: 'button', style: { ...styles.btn, marginLeft: live ? 6 : 'auto', padding: '2px 8px', fontSize: 11 }, onClick: loadList }, '刷新'),
           ),
           h('div', { style: styles.list },
             sessions.length === 0

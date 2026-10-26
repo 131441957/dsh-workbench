@@ -137,6 +137,42 @@ export function apply(ctx) {
         sendJson(res, r.status, await r.json())
         return
       }
+      if (url.pathname === `${PREFIX}/events`) {
+        // 把主驾桥的 SSE 原样转发给浏览器（带 token）；客户端断开就中止上游请求
+        const ac = new AbortController()
+        req.on('close', () => ac.abort())
+        let upstream
+        try {
+          upstream = await fetch(`http://127.0.0.1:${main.port}/wb-bridge/events`, { headers, signal: ac.signal })
+        } catch (error) {
+          sendJson(res, 502, { ok: false, error: String(error?.message ?? error) })
+          return
+        }
+        if (!upstream.ok || !upstream.body) {
+          sendJson(res, upstream.status || 502, { ok: false, error: '主驾桥事件流不可用' })
+          return
+        }
+        res.writeHead(200, {
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-cache, no-transform',
+          connection: 'keep-alive',
+          'x-accel-buffering': 'no',
+        })
+        const reader = upstream.body.getReader()
+        try {
+          for (;;) {
+            const { done, value } = await reader.read()
+            if (done) break
+            if (value) res.write(Buffer.from(value))
+          }
+        } catch {
+          /* 客户端断开或上游结束 */
+        } finally {
+          try { res.end() } catch { /* 已关闭 */ }
+        }
+        return
+      }
+
       sendJson(res, 404, { ok: false, error: 'unknown endpoint' })
     } catch (error) {
       sendJson(res, 502, { ok: false, error: String(error?.message ?? error) })
