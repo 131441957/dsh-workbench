@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """wb.py — DSH 工作台（Workbench）工具链 v0.2
 
 只用标准库。工具用 Python，DSH 插件仍必须用 JS（Cordis 加载器只认 JS）。
@@ -65,6 +65,184 @@ try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
 except Exception:
     pass
+
+
+# ── 路径自动识别 ────────────────────────────────────────────────────────
+CONFIG_FILE = WB_ROOT / "config.json"
+
+
+def valid_install(p: Path) -> bool:
+    return (p / "DeepSeek Harness.exe").exists() and (p / "resources" / "runtime" / "cli" / "bin" / "dsh.cmd").exists()
+
+
+def valid_home(p: Path) -> bool:
+    return (p / "profiles").is_dir()
+
+
+def _ps_lines(script: str, timeout: float = 60) -> list[str]:
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", script], capture_output=True, text=True,
+                             timeout=timeout, creationflags=RUNFLAGS, encoding="utf-8", errors="replace").stdout
+        return [ln.strip() for ln in out.splitlines() if ln.strip()]
+    except Exception:
+        return []
+
+
+def detect_install() -> tuple[Path | None, str]:
+    """识别主 harness 安装目录：运行中进程 → 快捷方式 → 注册表 → 常见位置。"""
+    # 1) 正在运行的主程序（排除工作台自己那份副本）
+    for line in _ps_lines("Get-Process -Name 'DeepSeek Harness' -ErrorAction SilentlyContinue | "
+                          "Select-Object -ExpandProperty Path"):
+        try:
+            p = Path(line).parent
+        except Exception:
+            continue
+        if str(p).lower().startswith(str(WB_ROOT).lower()):
+            continue
+        if valid_install(p):
+            return p, "运行中的主程序"
+
+    # 2) 桌面 / 开始菜单快捷方式
+    ps = r'''
+$sh = New-Object -ComObject WScript.Shell
+$dirs = @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('StartMenu'),
+          [Environment]::GetFolderPath('CommonStartMenu'))
+foreach ($d in $dirs) {
+  if (-not (Test-Path $d)) { continue }
+  Get-ChildItem $d -Recurse -Filter *.lnk -ErrorAction SilentlyContinue | ForEach-Object {
+    try { $t = $sh.CreateShortcut($_.FullName).TargetPath; if ($t) { $t } } catch {}
+  }
+}
+'''
+    for line in _ps_lines(ps):
+        if line.lower().endswith("deepseek harness.exe"):
+            p = Path(line).parent
+            if valid_install(p):
+                return p, "快捷方式"
+
+    # 3) 注册表卸载项
+    ps_reg = r'''
+$keys = @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+          'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+          'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*')
+foreach ($k in $keys) {
+  Get-ItemProperty $k -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -like '*DeepSeek Harness*' } |
+    ForEach-Object { $_.InstallLocation; $_.DisplayIcon }
+}
+'''
+    for line in _ps_lines(ps_reg):
+        raw = line.split(",")[0].strip('"')
+        cand = Path(raw).parent if raw.lower().endswith(".exe") else Path(raw)
+        if valid_install(cand):
+            return cand, "注册表"
+
+    # 4) 常见位置兜底
+    guesses = [Path(r"E:\SSS"), Path(r"E:\SOS"), Path(r"D:\SSS"),
+               Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "DeepSeek Harness",
+               Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "DeepSeek Harness"]
+    for g in guesses:
+        if valid_install(g):
+            return g, "常见位置"
+    return None, "未找到"
+
+
+def detect_home(install: Path | None) -> tuple[Path | None, str]:
+    """识别主 harness 数据目录（DSH_HOME）。"""
+    env = os.environ.get("DSH_HOME")
+    if env and valid_home(Path(env)):
+        return Path(env), "DSH_HOME 环境变量"
+
+    cands: list[tuple[Path, str]] = []
+    if install:
+        cands.append((install.parent / "DSH" / "home", "安装目录旁的 DSH\\home"))
+        cands.append((install / "home", "安装目录内 home"))
+        cands.append((install.parent / "home", "安装目录上一级 home"))
+    cands.append((Path(os.environ.get("USERPROFILE", "")) / ".dsh", "用户目录 .dsh"))
+    cands.append((Path(r"E:\DSH\home"), "已知位置 E:\\DSH\\home"))
+
+    for path, why in cands:
+        if valid_home(path) and (path / "profiles" / "desktop" / "package.json").exists():
+            return path, why
+    for path, why in cands:
+        if valid_home(path):
+            return path, why + "（无 desktop profile）"
+    return None, "未找到"
+
+
+def load_paths(redetect: bool = False, install: str | None = None, home: str | None = None,
+               quiet: bool = True) -> dict:
+    """读取/识别并缓存路径到 config.json；可用参数强制覆盖。"""
+    global MAIN_INSTALL, MAIN_HOME
+
+    cfg: dict = {}
+    if CONFIG_FILE.exists():
+        try:
+            cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
+        except Exception:
+            cfg = {}
+
+    changed = False
+    inst_src = cfg.get("installSource", "")
+    home_src = cfg.get("homeSource", "")
+
+    if install:
+        MAIN_INSTALL = Path(install)
+        inst_src = "手动指定"
+        changed = True
+    elif redetect or not cfg.get("install") or not valid_install(Path(cfg.get("install", ""))):
+        found, why = detect_install()
+        if found:
+            MAIN_INSTALL = found
+            inst_src = why
+        else:
+            MAIN_INSTALL = Path(cfg.get("install") or MAIN_INSTALL)
+        changed = True
+    else:
+        MAIN_INSTALL = Path(cfg["install"])
+
+    if home:
+        MAIN_HOME = Path(home)
+        home_src = "手动指定"
+        changed = True
+    elif redetect or not cfg.get("home") or not valid_home(Path(cfg.get("home", ""))):
+        found, why = detect_home(MAIN_INSTALL if valid_install(MAIN_INSTALL) else None)
+        if found:
+            MAIN_HOME = found
+            home_src = why
+        else:
+            MAIN_HOME = Path(cfg.get("home") or MAIN_HOME)
+        changed = True
+    else:
+        MAIN_HOME = Path(cfg["home"])
+
+    if changed or not CONFIG_FILE.exists():
+        CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        CONFIG_FILE.write_text(json.dumps({
+            "install": str(MAIN_INSTALL),
+            "installSource": inst_src,
+            "home": str(MAIN_HOME),
+            "homeSource": home_src,
+            "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    if not quiet:
+        ok(f"安装目录 {MAIN_INSTALL}（{inst_src}）")
+        ok(f"数据目录 {MAIN_HOME}（{home_src}）")
+    return {"install": MAIN_INSTALL, "installSource": inst_src, "home": MAIN_HOME, "homeSource": home_src}
+
+
+def cmd_paths(redetect: bool = False, install: str | None = None, home: str | None = None) -> int:
+    head("路径")
+    info(f"工作台根目录 {WB_ROOT}（固定）")
+    res = load_paths(redetect=redetect, install=install, home=home, quiet=False)
+    valid = valid_install(res["install"])
+    (ok if valid else bad)(f"安装目录有效性：{'OK' if valid else '找不到 dsh.cmd / exe'}")
+    if res["home"]:
+        (ok if (res["home"] / "profiles" / "desktop" / "package.json").exists() else warn)(
+            f"desktop profile：{'存在' if (res['home'] / 'profiles' / 'desktop' / 'package.json').exists() else '不存在'}")
+    ok(f"已写入 {CONFIG_FILE}")
+    return 0 if valid else 1
 
 
 # ── 输出小工具 ──────────────────────────────────────────────────────────
@@ -956,8 +1134,15 @@ def cmd_doctor() -> int:
     (ok if java else warn)(f"java        {java or '缺失（需要时装到 G 盘）'}")
 
     head("主 harness")
-    (ok if MAIN_INSTALL.exists() else bad)(f"安装        {MAIN_INSTALL}")
-    (ok if MAIN_HOME.exists() else bad)(f"数据        {MAIN_HOME}")
+    cfg = {}
+    try:
+        cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
+    except Exception:
+        cfg = {}
+    inst_src = cfg.get("installSource", "?")
+    home_src = cfg.get("homeSource", "?")
+    (ok if valid_install(MAIN_INSTALL) else bad)(f"安装        {MAIN_INSTALL}（{inst_src}）")
+    (ok if MAIN_HOME.exists() else bad)(f"数据        {MAIN_HOME}（{home_src}）")
     ports = main_harness_ports()
     (ok if ports else warn)(f"主 GUI 端口 {', '.join(map(str, ports)) or '未检测到'}")
 
@@ -1194,8 +1379,18 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--bundle", default="")
     ap.add_argument("--action", default="list")
     ap.add_argument("--spec", default="")
+    ap.add_argument("--redetect", action="store_true")
+    ap.add_argument("--install", default="")
+    ap.add_argument("--home", default="")
     ap.add_argument("-n", type=int, default=40)
     args = ap.parse_args(argv[1:])
+
+    # 除 watchdog 外，所有命令先确定路径（自动识别 + config.json 缓存）
+    if args.command not in ("watchdog",):
+        try:
+            load_paths(redetect=args.redetect, install=args.install or None, home=args.home or None)
+        except Exception as exc:  # noqa: BLE001
+            warn(f"路径识别失败，用默认值：{exc}")
 
     table = {
         "doctor": lambda: cmd_doctor(),
@@ -1212,6 +1407,7 @@ def main(argv: list[str]) -> int:
         "suspend": lambda: cmd_suspend(),
         "resume": lambda: cmd_resume(),
         "install": lambda: cmd_install(args.force),
+        "paths": lambda: cmd_paths(args.redetect, args.install or None, args.home or None),
         "rollback": lambda: cmd_rollback(),
         "sync-app": lambda: cmd_sync_app(args.force),
         "start": lambda: cmd_start(args.with_watchdog),

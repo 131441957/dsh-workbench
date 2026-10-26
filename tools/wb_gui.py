@@ -79,6 +79,8 @@ class App:
         self.version_label.pack(anchor="w")
         self.detail_label = ttk.Label(top, text="", foreground="#555")
         self.detail_label.pack(anchor="w", pady=(2, 0))
+        self.paths_label = ttk.Label(top, text="路径探测中…", foreground="#3a6", font=("Consolas", 9))
+        self.paths_label.pack(anchor="w", pady=(2, 0))
 
         btns = ttk.Frame(root, padding=(12, 6))
         btns.pack(fill="x")
@@ -91,7 +93,7 @@ class App:
             ("打开页面", ["page"]),
             ("暂停自动伴随", ["suspend"]),
             ("恢复自动伴随", ["resume"]),
-            ("刷新状态", ["status"]),
+            ("重新探测路径", ["paths", "--redetect"]),
         ]
         for col, (label, args) in enumerate(specs):
             b = ttk.Button(btns, text=label, command=lambda a=args, l=label: self.run_action(l, a))
@@ -161,6 +163,15 @@ class App:
     def _apply(self, main_v: str, wb_v: str, port: str, wd: str, sup: str) -> None:
         self.version_label.config(text=f"主驾 {main_v}   ·   工作台 {wb_v}")
         self.detail_label.config(text=f"59430：{port}   看门狗：{wd}   自动伴随：{sup}")
+        cfg_path = WB_ROOT / "config.json"
+        try:
+            import json as _json
+            cfg = _json.loads(cfg_path.read_text(encoding="utf-8-sig"))
+            self.paths_label.config(
+                text=f"主驾安装：{cfg.get('install', '?')}（{cfg.get('installSource', '?')}）   "
+                     f"数据：{cfg.get('home', '?')}（{cfg.get('homeSource', '?')}）")
+        except Exception:
+            self.paths_label.config(text="路径未探测：点「重新探测路径」")
 
 
 def selftest() -> int:
