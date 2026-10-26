@@ -173,3 +173,11 @@ java        缺失
 - 只写入工作台 `home\profiles\bench\cordis.patch.yml`（立即生效，刷新即可）。**主驾 profile 不写入**：曾越线改过一次，已按备份 `E:\newwork\backup\pre-ui-notice-20261026-210347` 完整还原（哈希一致、无残留）。主驾要去掉弹窗，由用户自己在界面点一次「继续」，或明确授权后再改。
 - 双保险：`ui\workbench.js` 里加了自动点「继续」的兜底（MutationObserver 未用，改为定时尝试点击对话框里的「继续」按钮，最多 40 次 × 0.5s），版本号将来变了也能自动关掉。
 - 想让它重新出现：把版本值改成别的字符串即可。
+
+## 关掉工作台里用不到的原版界面（2026-10-26）
+
+- 目标：左侧栏的「插件」「自动化任务」「工作区」三项原版入口去掉（由工作台自己的面板替代）。
+- 对应客户端插件行：`ui-plugin-manager`（插件）、`ui-schedule`（自动化任务）、`ui-workspace`（工作区）。
+- **关键坑**：直接改用户的 `home\profiles\bench\cordis.patch.yml` 加 `disabled: true` **会被应用在启动/设置写回时抹掉**（本会话试过一次，重启后行就没了）。正确做法＝写进**工作台自己的插件包补丁** `plugins\dsh-wb-ui\cordis.patch.yml`，由组装阶段应用，应用不会重写它。
+- 实测：`dump-config` 三行都带 `disabled: true`；页面模块表里 `client-ui-schedule` 已消失；`plugin-manager` / `workspace` 的模块名仍在（被别的模块当依赖引用），但对应插件行是 disabled，侧栏入口不再注册。
+- 顺带：`welcomeNoticeVersion` 也移进了包补丁（用户补丁层留不住 volatile 字段）。
