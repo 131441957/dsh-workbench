@@ -41,7 +41,7 @@
   // ── 2) 隐藏工作台用不到的原版入口 ────────────────────────────────────
   // 只做“看不见”，不禁用插件——禁用一个提供服务的插件（如 ui-workspace 提供
   // uiWorkspace）会连带 11 个插件 pending，整页报 "entries did not activate"。
-  const HIDE_TEXTS = ['插件', '自动化任务', '工作区', '默认工作区']
+  const HIDE_TEXTS = ['插件', '自动化任务', '工作区', '默认工作区', '新会话']
 
   const hideEntry = (el) => {
     if (!el || el.dataset.wbHidden === '1') return
@@ -86,9 +86,31 @@
     observer.observe(document.body, { childList: true, subtree: true })
   }
 
+  // ── 3) 默认打开「接口浏览器」，别停在没用的会话空状态 ────────────────
+  // 工作台没有 agent，会话首页只会显示“选择工作区开始”，没有任何用。
+  const DEFAULT_PANEL = '接口浏览器'
+  let defaulted = false
+
+  const isConversationLanding = () => {
+    const text = document.body ? document.body.innerText : ''
+    return /选择工作区|探索未至之境/.test(text)
+  }
+
+  const openDefaultPanel = () => {
+    if (defaulted || !isConversationLanding()) return
+    const entry = Array.from(document.querySelectorAll('button, a, [role="button"]'))
+      .find((el) => (el.textContent || '').trim() === DEFAULT_PANEL)
+    if (!entry) return
+    defaulted = true
+    entry.click()
+    console.info('[wb-ui] default panel ->', DEFAULT_PANEL)
+  }
+
   const boot = () => {
     dismiss()
     scheduleSweep()
+    setTimeout(openDefaultPanel, 800)
+    setTimeout(openDefaultPanel, 2000)
   }
 
   if (document.readyState === 'loading') {
