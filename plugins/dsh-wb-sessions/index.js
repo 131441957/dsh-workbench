@@ -117,7 +117,12 @@ export function apply(ctx) {
         const max = url.searchParams.get('max') ?? '30'
         const r = await fetch(`http://127.0.0.1:${main.port}/wb-bridge/session/page?id=${encodeURIComponent(id)}&max=${encodeURIComponent(max)}`,
           { headers, signal: AbortSignal.timeout(25000) })
-        sendJson(res, r.status, await r.json())
+        const body = await r.json()
+        // 系统提示词体积大又没信息量，界面上只留用户/助手消息
+        if (Array.isArray(body?.messages)) {
+          body.messages = body.messages.filter((m) => m.type === 'user/message' || m.type === 'assistant/message')
+        }
+        sendJson(res, r.status, body)
         return
       }
       if (url.pathname === `${PREFIX}/send`) {
