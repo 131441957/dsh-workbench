@@ -5,8 +5,8 @@ window.__ModuleLoader__.load({
     const h = React.createElement
     const { useState, useEffect, useMemo } = React
 
+    // 「插件」已拆成独立面板（顶栏/侧栏入口 wb-plugins），这里只放状态类标签
     const TABS = [
-      { id: 'plugins', label: '插件' },
       { id: 'services', label: '宿主服务' },
       { id: 'slots', label: '前端槽位' },
       { id: 'build', label: 'profile 分层' },
