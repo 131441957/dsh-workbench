@@ -33,14 +33,13 @@
     #wb-topbar .wb-brand small { font-weight: 400; opacity: .55; margin-left: 6px; font-size: 10px; }
     #wb-topbar button.wb-tab {
       border: 1px solid transparent; background: transparent; cursor: pointer;
-      padding: 6px 12px; border-radius: 7px; font: inherit;
-      color: var(--dsw-alias-label-secondary, #9aa0aa);
+      padding: 6px 12px; border-radius: 7px; font: inherit; color: inherit; opacity: .62;
     }
-    #wb-topbar button.wb-tab:hover { background: var(--dsw-alias-bg-secondary, #22262e); color: var(--dsw-alias-label-primary, #e6e6e6); }
+    #wb-topbar button.wb-tab:hover { opacity: 1; background: rgba(64, 132, 255, .12); }
     #wb-topbar button.wb-tab.wb-active {
-      background: var(--dsw-alias-bg-secondary, #22262e);
-      color: var(--dsw-alias-label-primary, #e6e6e6);
-      border-color: var(--dsw-alias-border-secondary, #2a2e37);
+      opacity: 1; font-weight: 600;
+      background: rgba(64, 132, 255, .18);
+      box-shadow: inset 0 0 0 1px rgba(64, 132, 255, .55);
     }
     #wb-topbar .wb-spacer { flex: 1; }
     #wb-topbar .wb-dot { width: 7px; height: 7px; border-radius: 50%; background: #4caf50; opacity: .8; }
@@ -101,17 +100,33 @@
   const findButton = (text) =>
     Array.from(document.querySelectorAll('button, a, [role="button"]')).find((el) => textOf(el) === text)
 
-  // 找“原侧栏”：从「设置」入口往上走，取那个窄而高的容器
-  const findSidebar = () => {
+  // 找“原侧栏”：从「设置」入口往上走，把所有“窄而高”的容器都收集起来（整条侧栏链路）
+  const NARROW = 460
+  const findSidebarChain = () => {
     const anchor = findButton('设置')
-    if (!anchor) return null
+    if (!anchor) return []
+    const chain = []
     let node = anchor
-    for (let depth = 0; depth < 8 && node; depth += 1) {
+    for (let depth = 0; depth < 9 && node; depth += 1) {
       const rect = node.getBoundingClientRect()
-      if (rect.height > window.innerHeight * 0.6 && rect.width > 120 && rect.width < 420) return node
+      if (rect.height > window.innerHeight * 0.5 && rect.width > 100 && rect.width < NARROW) chain.push(node)
       node = node.parentElement
     }
-    return null
+    return chain
+  }
+
+  // 侧栏藏掉后，让相邻的主内容撑满
+  const expandMain = (hiddenEls) => {
+    if (!hiddenEls.length) return
+    const outermost = hiddenEls[hiddenEls.length - 1]
+    const layout = outermost.parentElement
+    if (!layout) return
+    for (const child of Array.from(layout.children)) {
+      if (hiddenEls.includes(child) || child.classList.contains('wb-hidden')) continue
+      child.style.setProperty('flex', '1 1 auto', 'important')
+      child.style.setProperty('width', '100%', 'important')
+      child.style.setProperty('min-width', '0', 'important')
+    }
   }
 
   const clickTab = (text) => {
@@ -165,20 +180,25 @@
     const bar = document.getElementById('wb-topbar')
     if (!bar) return
     const h = bar.getBoundingClientRect().height || 46
-    const sidebar = findSidebar()
-    const main = sidebar ? sidebar.nextElementSibling : null
+    const chain = findSidebarChain()
+    const outermost = chain.length ? chain[chain.length - 1] : null
+    const main = outermost ? outermost.nextElementSibling : null
     const root = document.body.firstElementChild
     for (const el of [main, root].filter(Boolean)) {
-      if (el.id === 'wb-topbar') continue
+      if (el.id === 'wb-topbar' || el.classList.contains('wb-hidden')) continue
       el.classList.add('wb-topbar-offset')
       el.style.setProperty('padding-top', `${h}px`, 'important')
     }
   }
 
   const placeTopbar = () => {
-    // 侧栏还在就藏掉（只藏、不禁用插件——禁用一个提供服务的插件会让整页崩）
-    const sidebar = findSidebar()
-    if (sidebar) hide(sidebar)
+    // 整条侧栏链路都藏掉（只藏、不禁用插件——禁用一个提供服务的插件会让整页崩）
+    const chain = findSidebarChain()
+    if (chain.length) {
+      for (const el of chain) hide(el)
+      expandMain(chain)
+      state.sidebarHides = chain.length
+    }
     buildTopbar()
     offsetMain()
     if (!state.activeMarked && findButton('接口浏览器')) {
