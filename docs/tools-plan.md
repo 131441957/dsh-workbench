@@ -66,3 +66,16 @@ java        缺失
 
 「不是副本 harness」我按这个理解落地：**独立一整套安装 + 独立 home/配置/插件/端口/升级，且不提供聊天功能，只做插件宿主**（不是把主 harness 克隆一份来用）。
 如果你要的是更彻底的东西（比如完全不用 DSH、用 Python 自建宿主），代价是现有 `meow-*` 插件无法复用、需按新规范重写——那样的话告诉我，我改方案。
+
+## 生命周期与看门狗（2026-10-26 实测）
+
+- 看门狗用 **WMI Win32_Process.Create 启动**（父进程 `WmiPrvSE.exe`），因此它**不会随主程序退出被带走**——否则没人去关 59430。
+- 轮询：8 秒一次；端口探测用 `socket.create_connection`，进程存活用 `ctypes OpenProcess + GetExitCodeProcess`（**不 spawn 任何子进程**，桌面不会闪窗）。
+- 实测（用 3 秒就死的假主驾）：
+  ```
+  watchdog start, main pids=[9724]
+  main harness gone → stopping workbench
+  workbench not listening any more → watchdog exit
+  59430 已释放
+  ```
+- 行为约定：主程序（含托盘“完全退出”）关闭 → 8 秒内工作台关闭；主程序重新打开后**不会**自动拉起工作台（双击桌面「DSH 工作台」即可）。

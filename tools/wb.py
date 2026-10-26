@@ -174,6 +174,23 @@ def main_harness_ports() -> list[int]:
     return sorted({p for p, pid in netstat_listen() if pid in app_pids and p not in RESERVED_PORTS})
 
 
+def wmi_spawn(cmdline: str) -> int:
+    """用 WMI 起进程：父进程是 WmiPrvSE，脱离调用方的 Job 对象，主程序关掉也不会被带走。"""
+    ps = (
+        "$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create "
+        f"-Arguments @{{CommandLine = '{cmdline}'}}; $r.ProcessId"
+    )
+    proc = subprocess.run(
+        ["powershell", "-NoProfile", "-Command", ps],
+        capture_output=True, text=True, timeout=60, creationflags=RUNFLAGS,
+        encoding="utf-8", errors="replace",
+    )
+    try:
+        return int((proc.stdout or "").strip().splitlines()[-1])
+    except Exception:
+        return 0
+
+
 def kill_tree(pid: int) -> bool:
     try:
         subprocess.run([str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "taskkill.exe"),
@@ -572,14 +589,13 @@ def cmd_start(with_watchdog: bool = True) -> int:
         else:
             pythonw = Path(sys.executable).with_name("pythonw.exe")
             exe = pythonw if pythonw.exists() else Path(sys.executable)
-            watch = subprocess.Popen(
-                [str(exe), str(Path(__file__).resolve()), "watchdog",
-                 "--main-pids", ",".join(map(str, main_pids))],
-                creationflags=DETACHED | NO_WINDOW, stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            pids["watchdog"] = watch.pid
-            ok(f"看门狗已挂（盯主驾 pid={main_pids}，主驾一关工作台自动退）")
+            # 关键：用 WMI 起看门狗，脱离主程序的 Job，主程序关闭时它才活着把工作台关掉
+            wd_pid = wmi_spawn(f'"{exe}" "{Path(__file__).resolve()}" watchdog --main-pids {",".join(map(str, main_pids))}')
+            pids["watchdog"] = wd_pid
+            if wd_pid:
+                ok(f"看门狗已挂（pid={wd_pid}，独立于主程序；盯主驾 pid={main_pids}）")
+            else:
+                warn("看门狗启动失败（WMI 返回 0）")
     write_pids(pids)
     ok(f"启动完成。日志：{LOG_DIR}")
     return 0
