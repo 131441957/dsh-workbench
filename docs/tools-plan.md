@@ -181,3 +181,10 @@ java        缺失
 - **关键坑**：直接改用户的 `home\profiles\bench\cordis.patch.yml` 加 `disabled: true` **会被应用在启动/设置写回时抹掉**（本会话试过一次，重启后行就没了）。正确做法＝写进**工作台自己的插件包补丁** `plugins\dsh-wb-ui\cordis.patch.yml`，由组装阶段应用，应用不会重写它。
 - 实测：`dump-config` 三行都带 `disabled: true`；页面模块表里 `client-ui-schedule` 已消失；`plugin-manager` / `workspace` 的模块名仍在（被别的模块当依赖引用），但对应插件行是 disabled，侧栏入口不再注册。
 - 顺带：`welcomeNoticeVersion` 也移进了包补丁（用户补丁层留不住 volatile 字段）。
+
+## 精简左侧栏（2026-10-26，含一次把工作台搞挂的教训）
+
+- **坑**：`ui-workspace` 不只是「工作区」页面，它还**提供服务 `uiWorkspace`**。禁用它会连带 `ui-sidebar` / `ui-conversation` / `ui-chat` / `ui-subagent` 等 **11 个插件 pending**，浏览器直接报 `Failed to load plugins / web boot: 11 entries did not activate`。
+- 结论：**只禁用“纯页面、不提供服务”的行**。目前工作台禁用了 `ui-plugin-manager`（插件页）与 `ui-schedule`（自动化任务），实测无 pending。
+- 「工作区」改为**按文字隐藏**（`ui\workbench.js` 的 HIDE_TEXTS = 插件/自动化任务/工作区/默认工作区，配合 MutationObserver 节流重扫），不动插件依赖，改完刷新即生效、删掉脚本即恢复。
+- 排查口诀：页面报 `pending (waiting for service: xxx)` 时，去看是哪个被禁用的行提供了该服务——先恢复它，再改用隐藏。

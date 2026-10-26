@@ -1,19 +1,16 @@
-# workbench bundle patch: webui injection (tapIndex) + 关掉工作台用不到的原版界面
+# workbench bundle patch: webui injection (tapIndex) + 精简界面
 - insert:
     - id: wb-ui
       name: 'dsh-wb-ui'
-# 工作台不跑会话、不接 agent，这三个原版页面没有意义，直接关掉：
-#   插件       -> 用「接口浏览器」面板的「插件」标签替代
-#   自动化任务 -> 没有 agent，定时任务无从执行
-#   工作区     -> 不跑会话，工作区列表没有意义
-- id: ui-plugin-manager
-  disabled: true
+# ⚠️ 不要禁用 ui-workspace / ui-conversation 这类**提供服务**的行：
+#    ui-workspace 提供 uiWorkspace，一关会让 conversation/chat/sidebar 等 11 项 pending，
+#    浏览器直接报 "11 entries did not activate"。
+#    要「看不见」这些界面，用 ui/workbench.js 按文字隐藏（不动插件）。
 - id: ui-schedule
   disabled: true
-- id: ui-workspace
+- id: ui-plugin-manager
   disabled: true
-# 顺手把「预览版说明」的已读版本写死（等于替用户点过「继续」）。
-# 注意：写进用户补丁层会被应用的设置写回抹掉，所以放在包补丁里。
+# 预览版说明的已读版本（volatile 字段，只能放包补丁；用户补丁层会被应用重写抹掉）
 - id: ui-settings-general
   name: "@deepseek-ai/dsh-client-ui-settings-general"
   config:
