@@ -1,5 +1,7 @@
 // dsh-workbench-bridge — host half（挂在主 harness 上）.
-// 干两件事：① 给主界面提供“工作台是否接入”的状态 ② 给 agent 提供 workbench_* 工具。
+// 干三件事：① 工作台是否接入的状态 ② workbench_* 工具 ③ 会话桥（列会话 / 读历史 / 发消息）
+import { randomBytes } from 'node:crypto'
+import { writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -71,8 +73,7 @@ async function readBenchPlugins() {
   return { profileDir, bundles, plugins }
 }
 
-async function wbSearch(query, limit) {
-  const url = `http://127.0.0.1:${WB_PORT}/wb-web/search?q=${encodeURIComponent(query)}&limit=${limit}`
+async function wbSearch(query, limit) {  const url = `http://127.0.0.1:${WB_PORT}/wb-web/search?q=${encodeURIComponent(query)}&limit=${limit}`
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(45000) })
     const body = await res.json()
@@ -80,6 +81,104 @@ async function wbSearch(query, limit) {
   } catch (error) {
     return { ok: false, error: String(error && error.message ? error.message : error) }
   }
+}
+
+// ── 会话桥（主驾的会话：列 / 读历史 / 发消息）────────────────────────────
+const TOKEN_FILE = join(WB_ROOT, 'state', 'bridge-token.txt')
+let bridgeToken = ''
+
+function loadToken() {
+  try {
+    bridgeToken = randomBytes(16).toString('hex')
+    writeFileSync(TOKEN_FILE, bridgeToken, 'utf8')
+    return true
+  } catch (error) {
+    // 写不了盘就没法让工作台带 token，安全起见把会话路由整体关掉
+    bridgeToken = ''
+    console.warn?.('wb-bridge: 无法写入 token 文件：' + String(error))
+    return false
+  }
+}
+
+function tokenOk(req) {
+  return bridgeToken !== '' && String(req.headers['x-wb-token'] || '') === bridgeToken
+}
+
+async function readBody(req, limit = 64 * 1024) {
+  const chunks = []
+  let total = 0
+  for await (const chunk of req) {
+    total += chunk.length
+    if (total > limit) throw new Error('请求体过大')
+    chunks.push(chunk)
+  }
+  const text = Buffer.concat(chunks).toString('utf8')
+  return text ? JSON.parse(text) : {}
+}
+
+async function sessionList(ctx) {
+  const sc = ctx.get('sessionController')
+  if (!sc) return { ok: false, error: 'sessionController 不可用' }
+  const value = await sc.list({}, AbortSignal.timeout(20000))
+  return {
+    ok: true,
+    items: (value?.items ?? []).map((s) => ({
+      sessionId: s.sessionId,
+      updatedAt: s.updatedAt,
+      running: Boolean(s.running),
+      blank: Boolean(s.blank),
+      cwd: s.cwd ?? null,
+      origin: s.origin ?? null,
+      parentSessionId: s.parentSessionId ?? null,
+      agentAvailable: Boolean(s.agentAvailable),
+    })),
+  }
+}
+
+async function sessionPage(ctx, sessionId, maxMessages) {
+  const sc = ctx.get('sessionController')
+  if (!sc) return { ok: false, error: 'sessionController 不可用' }
+  const inspection = await sc.inspect(sessionId, AbortSignal.timeout(20000))
+  const events = inspection?.events ?? []
+  const throughSeq = events.length ? events[events.length - 1].seq : 0
+  const page = await sc.page({
+    address: { kind: 'session', sessionId },
+    throughSeq,
+    maxMessages,
+  }, AbortSignal.timeout(20000))
+  const messages = []
+  for (const record of page?.records ?? []) {
+    const event = record?.event
+    if (!event) continue
+    if (!['user/message', 'assistant/message', 'system/message'].includes(event.type)) continue
+    const message = event.data?.message ?? {}
+    const text = (message.content ?? [])
+      .filter((block) => block && block.type === 'text' && typeof block.text === 'string')
+      .map((block) => block.text)
+      .join('\n')
+      .trim()
+    if (!text) continue
+    messages.push({
+      seq: event.seq,
+      time: event.time,
+      type: event.type,
+      role: message.role ?? null,
+      text: text.length > 4000 ? text.slice(0, 4000) + '…' : text,
+    })
+  }
+  return { ok: true, sessionId, throughSeq, hasMore: Boolean(page?.hasMore), messages }
+}
+
+async function sessionPrompt(ctx, sessionId, text, mode) {
+  const sc = ctx.get('sessionController')
+  if (!sc) return { ok: false, error: 'sessionController 不可用' }
+  const value = await sc.prompt({
+    requestId: `wb-${Date.now()}-${randomBytes(4).toString('hex')}`,
+    sessionId,
+    mode: mode === 'steer' ? 'steer' : 'queue',
+    content: [{ type: 'text', text }],
+  }, AbortSignal.timeout(30000))
+  return { ok: Boolean(value?.accepted), accepted: Boolean(value?.accepted) }
 }
 
 async function statusPayload() {
@@ -150,10 +249,51 @@ export function apply(ctx) {
         sendJson(res, 200, await readBenchPlugins())
         return
       }
+      // 会话桥：写操作一律要 token（工作台启动时读 state\bridge-token.txt）
+      if (url.pathname === `${PREFIX}/sessions`) {
+        if (!tokenOk(req)) { sendJson(res, 401, { ok: false, error: 'bad token' }); return }
+        try {
+          sendJson(res, 200, await sessionList(ctx))
+        } catch (error) {
+          sendJson(res, 502, { ok: false, error: String(error?.message ?? error) })
+        }
+        return
+      }
+      if (url.pathname === `${PREFIX}/session/page`) {
+        if (!tokenOk(req)) { sendJson(res, 401, { ok: false, error: 'bad token' }); return }
+        const id = url.searchParams.get('id') ?? ''
+        const maxMessages = Math.min(Math.max(Number(url.searchParams.get('max')) || 30, 1), 200)
+        if (!id) { sendJson(res, 400, { ok: false, error: '缺少参数 id' }); return }
+        try {
+          sendJson(res, 200, await sessionPage(ctx, id, maxMessages))
+        } catch (error) {
+          sendJson(res, 502, { ok: false, error: String(error?.message ?? error) })
+        }
+        return
+      }
+      if (url.pathname === `${PREFIX}/session/prompt`) {
+        if (req.method !== 'POST') { sendJson(res, 405, { ok: false, error: 'method not allowed' }); return }
+        if (!tokenOk(req)) { sendJson(res, 401, { ok: false, error: 'bad token' }); return }
+        try {
+          const body = await readBody(req)
+          const id = String(body.sessionId || '')
+          const text = String(body.text || '').trim()
+          const mode = body.mode === 'steer' ? 'steer' : 'queue'
+          if (!id || !text) { sendJson(res, 400, { ok: false, error: '需要 sessionId 与 text' }); return }
+          sendJson(res, 200, await sessionPrompt(ctx, id, text, mode))
+        } catch (error) {
+          sendJson(res, 502, { ok: false, error: String(error?.message ?? error) })
+        }
+        return
+      }
       sendJson(res, 404, { error: 'unknown endpoint' })
     }
     ctx.effect(() => server.register({ kind: 'prefix', path: PREFIX, handler }))
-    ctx.logger?.info?.(`wb-bridge: ${PREFIX}/status ready (workbench port ${WB_PORT})`)
+    if (loadToken()) {
+      ctx.logger?.info?.(`wb-bridge: ${PREFIX}/* ready（会话桥已启用，token 在 state\\bridge-token.txt）`)
+    } else {
+      ctx.logger?.warn?.(`wb-bridge: ${PREFIX}/status 可用，但会话桥因缺 token 被禁用`)
+    }
   } else {
     ctx.logger?.warn?.('wb-bridge: webServer service unavailable')
   }

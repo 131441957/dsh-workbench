@@ -1,0 +1,4 @@
+# workbench bundle patch: session viewer (list / history / prompt forwarding)
+- insert:
+    - id: wb-sessions
+      name: 'dsh-wb-sessions'

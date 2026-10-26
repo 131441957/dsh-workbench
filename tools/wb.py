@@ -625,6 +625,12 @@ def cmd_supervise(interval: float = 8.0) -> int:
             elif (not main_up) and wb_up:
                 note("main harness gone → stopping workbench")
                 cmd_stop()
+            if main_up:
+                # 让工作台随时能拿到主驾端口（会话面板要用）
+                try:
+                    cmd_watch(True)
+                except Exception as exc:  # noqa: BLE001
+                    note(f"watch failed: {exc}")
         except Exception as exc:  # noqa: BLE001
             note(f"loop error: {exc}")
         time.sleep(interval)
@@ -1509,7 +1515,7 @@ def cmd_status() -> int:
     return 0
 
 
-def cmd_watch() -> int:
+def cmd_watch(quiet: bool = False) -> int:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     ports = main_harness_ports()
     payload = {
@@ -1534,7 +1540,8 @@ def cmd_watch() -> int:
                     payload["profiles"][prof.name] = {"error": str(exc)}
     out = STATE_DIR / "main-status.json"
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    ok(f"已写入 {out}")
+    if not quiet:
+        ok(f"已写入 {out}")
     return 0
 
 
