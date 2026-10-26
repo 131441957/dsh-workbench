@@ -212,7 +212,7 @@ window.__ModuleLoader__.load({
 
       return h(
         'div',
-        { style: styles.root },
+        { style: styles.root, 'data-wb-panel': 'api-browser' },
         h(
           'div',
           { style: styles.header },

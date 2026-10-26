@@ -332,7 +332,7 @@ window.__ModuleLoader__.load({
 
       const current = sessions.find((s) => s.sessionId === selected)
 
-      return h('div', { style: styles.root },
+      return h('div', { style: styles.root, 'data-wb-panel': 'sessions' },
         h('div', { style: styles.left },
           h('div', { style: styles.leftHead },
             h('span', { style: styles.title }, 'Harness 会话'),

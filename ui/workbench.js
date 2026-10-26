@@ -90,6 +90,7 @@
       }
     }
     pruneSettings()
+    maskUnknownMain()
     if (state.layoutApplied) return
   }
 
@@ -330,7 +331,8 @@
     probed = true
     openBtn.click()
     setTimeout(() => {
-      pruneSettings() // 先裁剪，再导出，导出的结果就是最终可见状态
+      pruneSettings()
+    maskUnknownMain() // 先裁剪，再导出，导出的结果就是最终可见状态
       snapshot('settings')
       const content = document.querySelector('.ZCYAFq_overlay')
       if (content) {
@@ -420,6 +422,32 @@
   }
   window.__wbPruneSettings = pruneSettings
 
+  // ── 7) 面板就位前遮住主区域，避免"探索未至之境"空状态闪一下 ─────────────
+  // 我们的面板根节点都带 data-wb-panel；在它出现之前，把主列的子元素先藏起来。
+  // 6 秒后无论如何都放开，避免面板异常时整块区域永久空白。
+  const bootAt = Date.now()
+  const maskUnknownMain = () => {
+    const center = document.querySelector('.OSewFq_centerCol')
+    if (!center) return
+    const ours = center.querySelector('[data-wb-panel]')
+    if (ours) {
+      if (state.mainMasked) {
+        for (const el of center.children) el.style.removeProperty('visibility')
+        state.mainMasked = false
+      }
+      return
+    }
+    if (Date.now() - bootAt > 6000) {
+      if (state.mainMasked) {
+        for (const el of center.children) el.style.removeProperty('visibility')
+        state.mainMasked = false
+      }
+      return
+    }
+    for (const el of center.children) el.style.setProperty('visibility', 'hidden', 'important')
+    state.mainMasked = true
+  }
+
   const boot = () => {
     attachStyle()
     dismiss()
@@ -429,8 +457,11 @@
     setTimeout(() => snapshot('baseline'), 1600)
     setTimeout(() => { placeTopbar(); forceLayout(); sweep() }, 2200)
     setTimeout(() => snapshot('after'), 3400)
-    setTimeout(() => { sweep(); forceLayout(); openDefault() }, 2600)
-    setTimeout(() => { sweep(); forceLayout(); openDefault() }, 4000)
+    setTimeout(() => { sweep(); forceLayout(); openDefault() }, 150)
+    setTimeout(() => { sweep(); forceLayout(); openDefault() }, 450)
+    setTimeout(() => { sweep(); forceLayout(); openDefault() }, 900)
+    setTimeout(() => { sweep(); forceLayout(); openDefault() }, 1800)
+    setTimeout(() => { sweep(); forceLayout(); openDefault() }, 3000)
     // 自动探测只在调试时用：默认关闭，需要时控制台执行 __wbProbeSettings()
     if ((location.search + location.hash).includes('probe-settings')) setTimeout(probeSettings, 5200)
     setInterval(() => { sweep(); watchSettings() }, 2500)
