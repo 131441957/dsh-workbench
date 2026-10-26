@@ -35,7 +35,7 @@
       flex: 1 1 auto; min-height: 0; min-width: 0;
       display: flex; flex-direction: column; overflow: hidden;
     }
-    #wb-shell > #wb-app-host > * { flex: 1 1 auto; min-height: 0; min-width: 0; }
+    #wb-shell > #wb-app-host > * { flex: 1 1 auto; min-height: 0; min-width: 0; max-height: 100%; }
     #wb-topbar .wb-brand {
       font-weight: 600; letter-spacing: .3px; margin-right: 10px;
       color: var(--dsw-alias-label-primary, #e6e6e6); white-space: nowrap;
