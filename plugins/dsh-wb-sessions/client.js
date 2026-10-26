@@ -153,12 +153,13 @@ window.__ModuleLoader__.load({
     // ── 样式 ────────────────────────────────────────────────────────────
     const styles = {
       root: { display: 'flex', height: '100%', minHeight: 0, background: 'var(--dsw-alias-bg-base)', color: 'var(--dsw-alias-label-primary)', font: 'inherit' },
-      left: { width: 250, flex: '0 0 auto', borderRight: '1px solid var(--dsw-alias-border-secondary)', display: 'flex', flexDirection: 'column', minHeight: 0 },
-      leftHead: { padding: '8px 10px', borderBottom: '1px solid var(--dsw-alias-border-secondary)', display: 'flex', gap: 6, alignItems: 'center' },
-      title: { fontSize: 12, fontWeight: 600 },
-      badge: { fontSize: 10, padding: '1px 6px', borderRadius: 8, background: 'var(--dsw-alias-bg-secondary)', color: 'var(--dsw-alias-label-secondary)' },
+      left: { width: 290, flex: '0 0 auto', borderRight: '1px solid var(--dsw-alias-border-secondary)', display: 'flex', flexDirection: 'column', minHeight: 0 },
+      leftHead: { padding: '8px 10px', borderBottom: '1px solid var(--dsw-alias-border-secondary)', display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'nowrap', minWidth: 0 },
+      liveRow: { padding: '5px 10px 6px', fontSize: 10, color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', borderBottom: '1px solid var(--dsw-alias-border-secondary)' },
+      title: { fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, flex: '0 1 auto' },
+      badge: { fontSize: 10, padding: '1px 6px', borderRadius: 8, background: 'var(--dsw-alias-bg-secondary)', color: 'var(--dsw-alias-label-secondary)', flex: '0 0 auto' },
       list: { flex: 1, overflow: 'auto', minHeight: 0 },
-      item: { padding: '7px 10px', borderBottom: '1px solid var(--dsw-alias-border-secondary)', cursor: 'pointer', fontSize: 12 },
+      item: { padding: '7px 10px', borderBottom: '1px solid var(--dsw-alias-border-secondary)', cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
       itemActive: { background: 'var(--dsw-alias-bg-secondary)' },
       itemSub: { color: 'var(--dsw-alias-label-secondary)', fontSize: 10, marginTop: 2 },
       right: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 },
@@ -335,9 +336,14 @@ window.__ModuleLoader__.load({
         h('div', { style: styles.left },
           h('div', { style: styles.leftHead },
             h('span', { style: styles.title }, 'Harness 会话'),
-            h('span', { style: styles.badge }, `${sessions.length}`),
-            live && live.sessions ? h('span', { style: { ...styles.badge, marginLeft: 'auto' } }, '主驾 ' + live.sessions.count + ' 会话 · ' + live.sessions.running + ' 运行') : null,
-            h('button', { type: 'button', style: { ...styles.btn, marginLeft: live ? 6 : 'auto', padding: '2px 8px', fontSize: 11 }, onClick: loadList }, '刷新'),
+            h('span', { style: styles.badge }, String(sessions.length)),
+            h('button', { type: 'button', style: { ...styles.btn, marginLeft: 'auto', padding: '2px 8px', fontSize: 11, flex: '0 0 auto' }, onClick: loadList }, '刷新'),
+          ),
+          h('div', { style: styles.liveRow },
+            live && live.sessions
+              ? '主驾 ' + live.sessions.count + ' 会话 · ' + live.sessions.running + ' 运行'
+                + (live.workbench && typeof live.workbench.latencyMs === 'number' ? ' · ' + live.workbench.latencyMs + 'ms' : '')
+              : '等待主驾事件流…',
           ),
           h('div', { style: styles.list },
             sessions.length === 0
