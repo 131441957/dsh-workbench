@@ -449,24 +449,18 @@ def cmd_supervise(interval: float = 8.0) -> int:
 
 
 def cmd_page() -> int:
-    """只打开页面：缺什么自己补（没装就自装、守护没跑就拉起），但不会替你改配置。"""
+    """只打开页面：不自作主张安装或升级（安装/修复请用安装器界面或 wb.py install）。"""
     if not APP_DSH_CMD.exists():
-        warn("还没装运行时 → 自动安装")
-        if cmd_install(False) != 0:
-            return 1
-    else:
-        mv, wv = main_version(), app_version()
-        if mv not in ("unknown", "") and wv != mv:
-            warn(f"版本不一致（主驾 {mv} / 工作台 {wv}）→ 自动同步运行时（旧版会备份）")
-            if cmd_sync_app(True) != 0:
-                warn("自动同步失败，继续用旧版启动")
+        warn(f"还没装运行时（{APP_DSH_CMD} 不存在）。")
+        info("请双击桌面「DSH 工作台 安装器」，或运行：wb.py install")
+        return 1
+    mv, wv = main_version(), app_version()
+    if mv not in ("unknown", "") and wv != mv:
+        warn(f"版本不一致（主驾 {mv} / 工作台 {wv}）。要跟进请在安装器里点「同步运行时」。")
     if not port_open(WB_PORT):
         if not find_supervisors() and not SUPERVISOR_FILE.exists():
-            warn("自动伴随没在跑 → 拉起")
+            warn("自动伴随没在跑 → 拉起守护（不改动任何文件）")
             cmd_resume()
-        else:
-            warn(f"{WB_PORT} 无响应 → 尝试拉起工作台")
-            cmd_start(True)
         deadline = time.time() + 45
         while time.time() < deadline and not port_open(WB_PORT):
             time.sleep(1)
@@ -562,7 +556,7 @@ $d = $ws.CreateShortcut("{desktop}\\DSH 工作台.lnk")
 $d.TargetPath = "{exe}"
 $d.Arguments = '"{script}" page'
 $d.WorkingDirectory = "{WB_ROOT}"
-$d.Description = "仅打开 DSH 工作台页面（服务由自动伴随负责）"
+$d.Description = "仅打开 DSH 工作台页面（不安装、不改动文件）"
 $d.IconLocation = "{icon},0"
 $d.Save()
 $s = $ws.CreateShortcut("{startup}\\DSH 工作台（自动伴随）.lnk")
@@ -572,6 +566,13 @@ $s.WorkingDirectory = "{WB_ROOT}"
 $s.Description = "主程序在时自动拉起 DSH 工作台，关闭时自动收掉"
 $s.IconLocation = "{icon},0"
 $s.Save()
+$g = $ws.CreateShortcut("{desktop}\\DSH 工作台 安装器.lnk")
+$g.TargetPath = "{exe}"
+$g.Arguments = '"{WB_ROOT}\\tools\\wb_gui.py"'
+$g.WorkingDirectory = "{WB_ROOT}"
+$g.Description = "可视化安装/修复/启停 DSH 工作台（用户自己点）"
+$g.IconLocation = "{icon},0"
+$g.Save()
 Write-Output "shortcuts-ok"
 '''
     out = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True,
