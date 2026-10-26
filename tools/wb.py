@@ -573,6 +573,7 @@ def cmd_open() -> int:
 
 
 SUPERVISOR_FILE = STATE_DIR / "supervisor.json"
+LOCK_FILE = STATE_DIR / "page.lock"
 
 
 def cmd_supervise(interval: float = 8.0) -> int:
@@ -626,37 +627,136 @@ def cmd_supervise(interval: float = 8.0) -> int:
         time.sleep(interval)
 
 
-def cmd_page() -> int:
-    """只打开页面：不自作主张安装或升级（安装/修复请用安装器界面或 wb.py install）。"""
-    if not APP_DSH_CMD.exists():
-        warn(f"还没装运行时（{APP_DSH_CMD} 不存在）。")
-        info("请双击桌面「DSH 工作台 安装器」，或运行：wb.py install")
-        return 1
-    mv, wv = main_version(), app_version()
-    if mv not in ("unknown", "") and wv != mv:
-        warn(f"版本不一致（主驾 {mv} / 工作台 {wv}）。要跟进请在安装器里点「同步运行时」。")
-    if not port_open(WB_PORT):
-        if not find_supervisors() and not SUPERVISOR_FILE.exists():
-            warn("自动伴随没在跑 → 拉起守护（不改动任何文件）")
-            cmd_resume()
-        deadline = time.time() + 45
-        while time.time() < deadline and not port_open(WB_PORT):
-            time.sleep(1)
-    if not port_open(WB_PORT):
-        bad(f"工作台仍然没起来（{WB_PORT}）。看日志：wb.py logs")
-        return 1
-    url = current_url()
-    if not url:
-        bad("拿不到入口 URL")
-        return 1
+def acquire_page_lock() -> bool:
+    """单实例锁：连点几次也只处理一次，避免同时弹出多个浏览器页。"""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        os.startfile(url)  # noqa: S606
+        if LOCK_FILE.exists():
+            try:
+                pid = int((LOCK_FILE.read_text(encoding="utf-8-sig").strip() or "0"))
+            except Exception:
+                pid = 0
+            if pid and pid != os.getpid() and pid_alive(pid):
+                return False
+            LOCK_FILE.unlink(missing_ok=True)
+        fd = os.open(str(LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        return True
+    except FileExistsError:
+        return False
+    except Exception:
+        return True
+
+
+def release_page_lock() -> None:
+    try:
+        if LOCK_FILE.exists() and LOCK_FILE.read_text(encoding="utf-8-sig").strip() == str(os.getpid()):
+            LOCK_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+LAST_OPEN_FILE = STATE_DIR / "last-open.txt"
+LANDING = WB_ROOT / "ui" / "landing.html"
+OPEN_COOLDOWN_SEC = 5
+
+
+def recently_opened() -> bool:
+    try:
+        ts = float(LAST_OPEN_FILE.read_text(encoding="utf-8-sig").strip())
+    except Exception:
+        return False
+    return (time.time() - ts) < OPEN_COOLDOWN_SEC
+
+
+def mark_opened() -> None:
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        LAST_OPEN_FILE.write_text(str(time.time()), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def open_landing(reason: str) -> None:
+    """工作台不可达时给用户一张本地说明页（比“点了没反应”强）。"""
+    try:
+        LANDING.parent.mkdir(parents=True, exist_ok=True)
+        LANDING.write_text(f"""<!doctype html>
+<meta charset="utf-8">
+<title>DSH 工作台没有打开</title>
+<style>
+ body{{font:15px/1.7 "Segoe UI",system-ui;margin:0;padding:40px;background:#16181d;color:#e6e6e6}}
+ h1{{font-size:20px;margin:0 0 6px}} .why{{color:#f0a;font-size:13px;margin-bottom:18px}}
+ li{{margin:6px 0}} code{{background:#22262e;padding:2px 6px;border-radius:4px}}
+ .tip{{color:#8a8f98;font-size:12px;margin-top:18px}}
+</style>
+<h1>DSH 工作台现在打不开</h1>
+<div class="why">原因：{reason}</div>
+<ol>
+  <li>工作台是**跟着主程序开关**的：主 harness 没开，它就不会运行。</li>
+  <li>先把主 harness 打开，等 5~10 秒（守护会自动把工作台拉起来）。</li>
+  <li>再双击桌面的「DSH 工作台」。</li>
+</ol>
+<div class="tip">如果主程序已经开着、还是打不开：双击桌面「DSH 工作台 安装器」，点「安装 / 修复」，日志里会写清楚卡在哪。</div>
+</body>
+""", encoding="utf-8")
+        os.startfile(str(LANDING))  # noqa: S606
     except Exception as exc:  # noqa: BLE001
-        warn(f"打开失败（{exc}），手动复制：")
-        print(url)
-        return 1
-    ok(f"已打开 → {url}")
-    return 0
+        warn(f"连说明页也没打开：{exc}")
+
+
+def cmd_page() -> int:
+    """只打开页面：不安装、不升级；主驾没开就直接告诉你，不干等。"""
+    if not acquire_page_lock():
+        info("已经有一个打开请求在处理，这次忽略（防止弹出多个页面）")
+        return 0
+    try:
+        if recently_opened():
+            info(f"刚刚已经打开过（{OPEN_COOLDOWN_SEC} 秒内），这次忽略")
+            return 0
+        if not APP_DSH_CMD.exists():
+            warn(f"还没装运行时（{APP_DSH_CMD} 不存在）。")
+            info("请双击桌面「DSH 工作台 安装器」，或运行：wb.py install")
+            open_landing("还没有安装工作台运行时")
+            return 1
+
+        mv, wv = main_version(), app_version()
+        if mv not in ("unknown", "") and wv != mv:
+            warn(f"版本不一致（主驾 {mv} / 工作台 {wv}）。要跟进请在安装器里点「同步运行时」。")
+
+        if not port_open(WB_PORT):
+            if not main_harness_ports():
+                warn("主 harness 没开 → 工作台不会运行（它是跟着主程序开关的）")
+                open_landing("主 harness 没开，工作台不会运行")
+                return 1
+            if not find_supervisors():
+                info("自动伴随没在跑 → 拉起")
+                cmd_resume()
+            deadline = time.time() + 20
+            while time.time() < deadline and not port_open(WB_PORT):
+                time.sleep(0.5)
+
+        if not port_open(WB_PORT):
+            bad(f"工作台没起来（{WB_PORT} 无响应）。看日志：wb.py logs")
+            open_landing("工作台进程没起来（端口 59430 无响应）")
+            return 1
+
+        url = current_url()
+        if not url:
+            bad("拿不到入口 URL")
+            return 1
+        try:
+            mark_opened()
+            os.startfile(url)  # noqa: S606
+        except Exception as exc:  # noqa: BLE001
+            warn(f"打开失败（{exc}），手动复制：")
+            print(url)
+            return 1
+        ok(f"已打开 → {url}")
+        return 0
+    finally:
+        release_page_lock()
 
 
 def cmd_supervisor_status() -> int:
