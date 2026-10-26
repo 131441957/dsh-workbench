@@ -3,7 +3,12 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-export const inject = ['webServer', 'tools']
+// 软依赖：服务用 ctx.get 取，取不到就稍后重试。
+// 绝不能写成 inject: ['webServer','tools']——那样一旦官方改服务名，本 entry 会 pending，
+// 进而 startup failed，把主驾一起打死（违反“官方更新不牵连”的要求）。
+export const inject = []
+
+const started = new WeakSet()
 
 const PREFIX = '/wb-bridge'
 const WB_PORT = Number(process.env.DSH_WORKBENCH_PORT || 59430)
@@ -90,8 +95,32 @@ async function statusPayload() {
 }
 
 export function apply(ctx) {
+  if (started.has(ctx)) return
+  started.add(ctx)
+
   const server = ctx.get('webServer')
   const tools = ctx.get('tools')
+
+  if (!server && !tools) {
+    // 服务还没挂载（或新版改名了）：保持“已激活但什么都不做”，1 秒后重试，最多 2 分钟
+    let tries = 0
+    const retry = () => {
+      tries += 1
+      if (ctx.get('webServer') || ctx.get('tools')) {
+        started.delete(ctx)
+        try {
+          apply(ctx)
+        } catch (error) {
+          ctx.logger?.warn?.(`wb-bridge: retry failed: ${String(error)}`)
+        }
+        return
+      }
+      if (tries < 120) setTimeout(retry, 1000)
+      else ctx.logger?.warn?.('wb-bridge: webServer/tools 一直不可用，桥保持空闲（不影响主驾启动）')
+    }
+    setTimeout(retry, 1000)
+    return
+  }
 
   if (server) {
     const handler = async (req, res) => {
