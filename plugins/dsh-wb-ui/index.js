@@ -1,7 +1,7 @@
 // dsh-wb-ui — 工作台的 webui 注入层。
 // 原理：webServer.tapIndex(html => html) 纯字符串改写，把 ui/workbench.css / workbench.js
 // 塞进浏览器拿到的 index.html。**不修改安装目录里的任何文件**，删掉 ui 文件或停用本插件即恢复原样。
-import { readFileSync, statSync } from 'node:fs'
+import { readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 export const inject = []
@@ -68,6 +68,31 @@ export function apply(ctx) {
   ctx.effect(() => server.tapIndex(transform))
 
   const handler = async (req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1')
+
+    // 页面把真实 DOM 结构（标签/类名/位置/尺寸）POST 过来，落到 state\dom-snapshot.json，
+    // 供改样式时按真实类名下手，不再靠猜。
+    if (req.method === 'POST' && url.pathname === '/wb-ui/dom') {
+      const chunks = []
+      let total = 0
+      try {
+        for await (const chunk of req) {
+          total += chunk.length
+          if (total > 4 * 1024 * 1024) throw new Error('payload too large')
+          chunks.push(chunk)
+        }
+        const text = Buffer.concat(chunks).toString('utf8')
+        const out = join(WB_ROOT, 'state', 'dom-snapshot.json')
+        writeFileSync(out, text, 'utf8')
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ ok: true, bytes: text.length, path: out }))
+      } catch (error) {
+        res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify({ ok: false, error: String(error?.message ?? error) }))
+      }
+      return
+    }
+
     const body = {
       ok: true,
       uiDir: UI_DIR,

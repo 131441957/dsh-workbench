@@ -77,21 +77,18 @@
     if (t && !state.hidden.includes(t)) state.hidden.push(t)
   }
 
+  // sweep 里不再动布局，只做“隐藏用不到的入口 + 静音 toast”，布局改造交给 placeTopbar
   const sweep = () => {
     state.sweeps += 1
     attachStyle()
     for (const node of document.querySelectorAll('button, a, [role="button"], [role="listitem"], li, div, span')) {
       const text = textOf(node)
       if (!text || text.length > 24) continue
-      if (HIDE_TEXTS.includes(text)) {
-        hide(node.closest('button, a, [role="button"], [role="listitem"], li') || node)
-        continue
-      }
       if (SILENCE_TEXTS.some((n) => text.includes(n))) {
         hide(node.closest('[role="status"], [role="alert"], [class*="toast" i], [class*="alert" i]') || node)
       }
     }
-    placeTopbar()
+    if (state.layoutApplied) return
   }
 
   // ── 3) 把侧栏藏起来，换成顶部导航 ────────────────────────────────────
@@ -225,16 +222,44 @@
     observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] })
   }
 
+  // ── 5) 把真实 DOM 结构上报（只用于设计样式，不改任何东西）──────────────
+  const snapshot = (tag) => {
+    const nodes = []
+    const walk = (el, depth) => {
+      if (!el || nodes.length > 1500 || depth > 7) return
+      const r = el.getBoundingClientRect()
+      nodes.push({
+        d: depth,
+        tag: el.tagName.toLowerCase(),
+        id: el.id || '',
+        cls: String(el.className || '').slice(0, 140),
+        x: Math.round(r.x), y: Math.round(r.y),
+        w: Math.round(r.width), h: Math.round(r.height),
+        text: (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 40),
+      })
+      for (const child of el.children) walk(child, depth + 1)
+    }
+    walk(document.body, 0)
+    fetch('/wb-ui/dom', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tag: tag || 'after', at: new Date().toISOString(), url: location.href.slice(0, 120), viewport: { w: innerWidth, h: innerHeight }, nodes }),
+    }).then(() => console.info(`[wb-ui] dom snapshot (${tag}) sent:`, nodes.length)).catch(() => {})
+  }
+  window.__wbSnapshot = snapshot
+
   const boot = () => {
     attachStyle()
     dismiss()
-    sweep()
+    sweep() // 第一轮：先只处理 toast / 弹窗，不动布局
     observe()
-    setTimeout(sweep, 300)
-    setTimeout(sweep, 1200)
-    setTimeout(() => { sweep(); openDefault() }, 900)
-    setTimeout(() => { sweep(); openDefault() }, 2200)
-    setInterval(() => { sweep() }, 2000)
+    // 顺序很重要：先拍“隐藏侧栏前”的原始布局，再改造，再拍一张对照
+    setTimeout(() => snapshot('baseline'), 1600)
+    setTimeout(() => { placeTopbar(); sweep() }, 2200)
+    setTimeout(() => snapshot('after'), 3400)
+    setTimeout(() => { sweep(); openDefault() }, 2600)
+    setTimeout(() => { sweep(); openDefault() }, 4000)
+    setInterval(() => { sweep() }, 2500)
   }
 
   if (document.readyState === 'loading') {
