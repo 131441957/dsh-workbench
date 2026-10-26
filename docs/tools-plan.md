@@ -32,7 +32,7 @@
 | 1 | `wb.py doctor` | 运行时/依赖/接口/目录自检 | Python | ✅ 已完成并跑通 |
 | 2 | `wb.py status` | 主驾 + 工作台状态（端口/进程/home/记忆条数） | Python | ✅ 已完成并跑通 |
 | 3 | `wb.py watch` | 采集主 harness 状态快照 → `state/main-status.json` | Python | ✅ 已完成并跑通 |
-| 4 | `wb.py start/stop/restart` | 工作台启停；**无窗口**；**看门狗绑主驾生命周期** | Python | ⬜ 待造 |
+| 4 | `wb.py start/stop/restart` + `sync-app` | 工作台启停；**无窗口**；**看门狗绑主驾生命周期** | Python | ✅ 已完成并实测（看门狗用假主驾验证过会关掉工作台） |
 | 5 | `wb.py plugins` | 列插件 / 安装（link）/ 生成 profile patch / 触发 reload | Python 调 bundled pnpm.mjs | ⬜ 待造 |
 | 6 | `wb.py api` | 导出 Service / Event / Slots / Theme 清单，做**接口基线** | Python | ⬜ 待造（优先级 2） |
 | 7 | `wb.py backup` | 独立快照（git 提交 + manifest + 回读校验） | Python + git | ⬜ 待造 |

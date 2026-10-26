@@ -1,0 +1,1 @@
+Placeholder so meow-memory treats this as an existing (reused-nonempty) home dir instead of renaming/moving another one into it.

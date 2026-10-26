@@ -1,0 +1,26 @@
+{
+  "unit": {
+    "name": "workspace",
+    "version": 2
+  },
+  "global": {
+    "initialized": true,
+    "workspaceIds": [
+      "3f7a2b91-6c4d-4e21-9a83-5c0d1e7b2f64"
+    ],
+    "archivedSessionIds": [],
+    "pinnedSessionIds": [],
+    "defaultWorkspaceId": "3f7a2b91-6c4d-4e21-9a83-5c0d1e7b2f64"
+  },
+  "tables": {
+    "workspaces": {
+      "3f7a2b91-6c4d-4e21-9a83-5c0d1e7b2f64": {
+        "path": "E:\\肥鱼工作区",
+        "title": "肥鱼工作区",
+        "sessionIds": [],
+        "createdAt": "2026-10-26T09:40:00.000Z",
+        "updatedAt": "2026-10-26T09:40:00.000Z"
+      }
+    }
+  }
+}
