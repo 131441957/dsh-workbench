@@ -13,19 +13,29 @@
   display: none !important;
 }
 
-/* ② 中列（真正放面板的那列）撑满 */
+/* ② frame 原本可能是 grid（固定列宽 280px），强制改成 flex，让中列吃满 */
+.OSewFq_frame {
+  display: flex !important;
+  flex-direction: row !important;
+}
+
+/* ③ 中列（真正放面板的那列）撑满 */
 .OSewFq_centerCol {
   flex: 1 1 auto !important;
   width: auto !important;
+  max-width: none !important;
   min-width: 0 !important;
 }
 
-/* ③ 底部行/覆盖层保持正常 */
+/* ④ 列宽拖拽手柄没意义了 */
+.OSewFq_handle {
+  display: none !important;
+}
+
+/* ⑤ 底部行/覆盖层保持正常 */
 .OSewFq_bottomRow {
   flex: 0 0 auto !important;
 }
-
-/* ④ 顶栏留白由 body padding-top 负责（见 workbench.js 的 reserveTopSpace） */
 
 /* ────────────────────────────────────────────────────────────────
  * 以下为示例样式，可自行增删

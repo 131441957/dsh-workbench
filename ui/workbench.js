@@ -248,6 +248,29 @@
   }
   window.__wbSnapshot = snapshot
 
+  // 布局兜底：如果 3 秒后中列还没吃满宽度，就用内联样式硬掰（grid → flex）
+  const forceLayout = () => {
+    const frame = document.querySelector('.OSewFq_frame')
+    const center = document.querySelector('.OSewFq_centerCol')
+    if (!frame || !center) return false
+    if (center.getBoundingClientRect().width > window.innerWidth * 0.7) {
+      state.layoutOk = true
+      return true
+    }
+    frame.style.setProperty('display', 'flex', 'important')
+    frame.style.setProperty('flex-direction', 'row', 'important')
+    center.style.setProperty('flex', '1 1 auto', 'important')
+    center.style.setProperty('width', 'auto', 'important')
+    center.style.setProperty('max-width', 'none', 'important')
+    center.style.setProperty('min-width', '0', 'important')
+    for (const cls of ['.OSewFq_sidebarCol', '.OSewFq_rightbarCol', '.OSewFq_handle']) {
+      const el = document.querySelector(cls)
+      if (el) el.style.setProperty('display', 'none', 'important')
+    }
+    state.layoutForced = center.getBoundingClientRect().width
+    return true
+  }
+
   const boot = () => {
     attachStyle()
     dismiss()
@@ -255,10 +278,10 @@
     observe()
     // 顺序很重要：先拍“隐藏侧栏前”的原始布局，再改造，再拍一张对照
     setTimeout(() => snapshot('baseline'), 1600)
-    setTimeout(() => { placeTopbar(); sweep() }, 2200)
+    setTimeout(() => { placeTopbar(); forceLayout(); sweep() }, 2200)
     setTimeout(() => snapshot('after'), 3400)
-    setTimeout(() => { sweep(); openDefault() }, 2600)
-    setTimeout(() => { sweep(); openDefault() }, 4000)
+    setTimeout(() => { sweep(); forceLayout(); openDefault() }, 2600)
+    setTimeout(() => { sweep(); forceLayout(); openDefault() }, 4000)
     setInterval(() => { sweep() }, 2500)
   }
 
