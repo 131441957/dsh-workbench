@@ -120,6 +120,15 @@ async function sessionList(ctx) {
   const sc = ctx.get('sessionController')
   if (!sc) return { ok: false, error: 'sessionController 不可用' }
   const value = await sc.list({}, AbortSignal.timeout(20000))
+  // 摘要里的 projections.values 带会话标题等派生信息；只透出标量，避免载荷膨胀
+  const scalars = (values) => {
+    const out = {}
+    if (!values || typeof values !== 'object') return out
+    for (const [key, raw] of Object.entries(values)) {
+      if (typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean') out[key] = raw
+    }
+    return out
+  }
   return {
     ok: true,
     items: (value?.items ?? []).map((s) => ({
@@ -131,6 +140,9 @@ async function sessionList(ctx) {
       origin: s.origin ?? null,
       parentSessionId: s.parentSessionId ?? null,
       agentAvailable: Boolean(s.agentAvailable),
+      projections: s.projections
+        ? { asOfSeq: s.projections.asOfSeq, values: scalars(s.projections.values) }
+        : null,
     })),
   }
 }

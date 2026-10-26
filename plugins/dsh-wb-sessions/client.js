@@ -212,16 +212,28 @@ window.__ModuleLoader__.load({
       return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
     }
 
-    // 会话显示名：优先用 cwd 末段，否则用 id 短号
+    // 标题来源：桥补的 s.title，或摘要里的 projections.values.title
+    function sessionTitle(s) {
+      const direct = String(s.title || '').trim()
+      if (direct) return direct
+      const projected = s.projections && s.projections.values ? s.projections.values.title : ''
+      return typeof projected === 'string' ? projected.trim() : ''
+    }
+
+    // 会话显示名：优先标题，其次 cwd 末段，最后 id 短号
     function sessionLabel(s) {
+      const title = sessionTitle(s)
+      if (title) return title
       const tail = String(s.cwd || '').split(/[\\/]/).filter(Boolean).slice(-1)[0]
       if (tail) return tail
-      return s.sessionId.replace('session-', '').slice(0, 8)
+      return '#' + s.sessionId.replace('session-', '').slice(0, 8)
     }
 
     // 分组：按工作区（cwd 末段）分组；组内按排序模式排序
-    // 行标题：工作区模式下组头已经显示工作区名，行内改用短号，避免重复
+    // 行标题：有标题就显示标题；没有标题时，工作区模式下用短号避免与组头重复
     function rowTitle(s, group) {
+      const title = sessionTitle(s)
+      if (title) return title
       const short = '#' + s.sessionId.replace('session-', '').slice(0, 8)
       if (group && group.key && String(group.key).startsWith('ws:')) return short
       return sessionLabel(s)

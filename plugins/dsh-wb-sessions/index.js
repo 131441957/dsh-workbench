@@ -1,7 +1,9 @@
 // dsh-wb-sessions — 工作台的“会话视图”后端。
 // 只做代理：读主驾的 state 文件拿到端口与 token，再转发到主驾桥 /wb-bridge/session*。
 // 会话本体始终在主 harness，这里不落任何数据。
+import { readFileSync, readdirSync, existsSync, createReadStream } from 'node:fs'
 import { readFile } from 'node:fs/promises'
+import { createZstdDecompress } from 'node:zlib'
 import { join } from 'node:path'
 
 export const inject = []
@@ -17,6 +19,77 @@ function sendJson(res, status, body) {
     'cache-control': 'no-store',
   })
   res.end(JSON.stringify(body))
+}
+
+// ── 会话标题：主驾的 SessionSummary 没有 title，标题在会话日志的 session/title 事件里 ──
+// 日志是多帧 zstd 追加写，必须流式解压（zstdDecompressSync 只解第一帧）；带 120 秒缓存。
+const titleCache = new Map()
+
+function dshHome() {
+  // 工作台进程自己的 DSH_HOME 指向 E:\DSH-WORKBENCH\home，
+  // 主驾的会话日志在 config.json 记录的 home 里，所以优先读 config.json。
+  try {
+    const cfg = JSON.parse(readFileSync(join(WB_ROOT, 'config.json'), 'utf8'))
+    if (cfg.home) return cfg.home
+  } catch { /* 忽略 */ }
+  return process.env.DSH_HOME || 'E:\\DSH\\home'
+}
+
+function findSessionLog(sessionId) {
+  const root = join(dshHome(), 'sessions')
+  const short = String(sessionId).replace(/^session-/, '')
+  const dirName = 'session-' + short
+  try {
+    for (const ws of readdirSync(root, { withFileTypes: true })) {
+      if (!ws.isDirectory()) continue
+      const file = join(root, ws.name, dirName, 'session.v4.jsonl.zstd')
+      if (existsSync(file)) return file
+    }
+  } catch { /* 忽略 */ }
+  return ''
+}
+
+async function extractSessionTitle(file) {
+  // 不用 pipeline：在 Cordis 里它会被取消作用域中止（"The operation was aborted"）。
+  const chunks = []
+  const decompressor = createZstdDecompress()
+  decompressor.on('data', (chunk) => chunks.push(chunk))
+  const finished = new Promise((resolve, reject) => {
+    decompressor.on('end', resolve)
+    decompressor.on('error', reject)
+  })
+  const source = createReadStream(file)
+  source.on('error', (error) => decompressor.destroy(error))
+  source.pipe(decompressor)
+  await finished
+  const raw = Buffer.concat(chunks).toString('utf8')
+  let title = ''
+  for (const line of raw.split('\n')) {
+    if (!line.includes('"session/title"')) continue
+    try {
+      const rec = JSON.parse(line)
+      if (rec.type === 'session/title' && rec.data && typeof rec.data.title === 'string') title = rec.data.title
+    } catch { /* 跳过坏行 */ }
+  }
+  return { title, chars: raw.length }
+}
+
+async function readSessionTitle(sessionId) {
+  const cached = titleCache.get(sessionId)
+  const now = Date.now()
+  if (cached && now - cached.at < 120000) return cached.title
+  const file = findSessionLog(sessionId)
+  if (!file) return cached ? cached.title : ''
+  let title = ''
+  try {
+    const result = await extractSessionTitle(file)
+    title = result.title
+  } catch {
+    title = cached ? cached.title : ''
+  }
+  if (!title && cached) title = cached.title
+  titleCache.set(sessionId, { at: now, title })
+  return title
 }
 
 async function readJson(name) {
@@ -107,9 +180,37 @@ export function apply(ctx) {
     const headers = { accept: 'application/json', 'x-wb-token': main.token }
 
     try {
+      if (url.pathname === `${PREFIX}/title-debug`) {
+        const id = url.searchParams.get('id') || ''
+        const file = findSessionLog(id)
+        const out = { id, home: dshHome(), file }
+        if (file) {
+          try {
+            const result = await extractSessionTitle(file)
+            out.title = result.title
+            out.chars = result.chars
+          } catch (error) {
+            out.error = String(error && error.message ? error.message : error)
+          }
+        }
+        sendJson(res, 200, out)
+        return
+      }
+
       if (url.pathname === `${PREFIX}/list`) {
         const r = await fetch(`http://127.0.0.1:${main.port}/wb-bridge/sessions`, { headers, signal: AbortSignal.timeout(25000) })
-        sendJson(res, r.status, await r.json())
+        const body = await r.json()
+        // 主驾摘要没有标题，这里从会话日志补上（只读主驾文件，120 秒缓存）
+        if (Array.isArray(body && body.items)) {
+          for (const item of body.items) {
+            try {
+              item.title = (await readSessionTitle(item.sessionId)) || ''
+            } catch {
+              item.title = ''
+            }
+          }
+        }
+        sendJson(res, r.status, body)
         return
       }
       if (url.pathname === `${PREFIX}/page`) {
