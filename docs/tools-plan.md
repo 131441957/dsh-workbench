@@ -111,3 +111,10 @@ java        缺失
 - 识别结果写入 `E:\DSH-WORKBENCH\config.json`（带来源字段），之后直接复用；缓存路径失效会自动重新探测。
 - 手动覆盖 / 重新探测：`wb.py paths --redetect`、`wb.py paths --install <路径> --home <路径>`。
 - 安装器界面顶栏显示“主驾安装：…（来源）”和“数据：…（来源）”，并有「重新探测路径」按钮。
+
+## 边界：绝不重装主 harness（2026-10-26）
+
+- 主 harness **只升级、不重装**：升级走 `E:\newwork\update-dsh.ps1`（备份 home/data/plugins/exports → 安装 → 核对 → 可 `-RestoreFrom` 回滚）。
+- 工作台的「同步运行时」**只是把主驾当前安装复制到 `E:\DSH-WORKBENCH\app`**，旧的那份改名进 `backups\`，可用「回滚运行时」秒级切回。**不碰 `E:\SSS`，不重装任何东西。**
+- 界面已把按钮改名为「同步运行时（复制主驾安装）」，并在执行前弹确认框写明「不会重装、不会修改主驾」。
+- 若将来 harness 本体真坏了：正确顺序是「先备份 home → 装同版本到新目录 → 用 DSH_HOME 指回原 home → 验证」，而不是覆盖重装。

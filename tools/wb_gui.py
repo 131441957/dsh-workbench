@@ -86,7 +86,7 @@ class App:
         btns.pack(fill="x")
         specs = [
             ("安装 / 修复", ["install"]),
-            ("同步运行时(重装)", ["install", "--force"]),
+            ("同步运行时（复制主驾安装）", ["install", "--force"]),
             ("回滚运行时", ["rollback"]),
             ("启动工作台", ["start"]),
             ("停止工作台", ["stop"]),
@@ -125,6 +125,16 @@ class App:
         if self.worker and self.worker.is_alive():
             messagebox.showinfo("正在忙", "上一个操作还没结束，等它跑完。")
             return
+        if args == ["install", "--force"]:
+            if not messagebox.askyesno(
+                "确认同步运行时",
+                "这一步只会把【主驾当前的安装】复制到：\n\n"
+                "    E:\\DSH-WORKBENCH\\app\n\n"
+                "旧的那份会改名备份到 backups\\（可「回滚运行时」秒回）。\n\n"
+                "**不会重装、不会修改主驾，也不碰 E:\\SSS。**\n\n继续吗？",
+            ):
+                self.write("已取消同步运行时。")
+                return
         self.write(f"\n===== {label}  ({time.strftime('%H:%M:%S')}) =====")
         self.worker = threading.Thread(target=self._run, args=(args,), daemon=True)
         self.worker.start()
