@@ -1,0 +1,4 @@
+# workbench bundle patch: exposes ctx.web over HTTP for the main-harness bridge
+- insert:
+    - id: wb-web
+      name: 'dsh-wb-web'

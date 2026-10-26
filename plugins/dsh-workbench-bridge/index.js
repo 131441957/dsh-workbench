@@ -71,6 +71,17 @@ async function readBenchPlugins() {
   return { profileDir, bundles, plugins }
 }
 
+async function wbSearch(query, limit) {
+  const url = `http://127.0.0.1:${WB_PORT}/wb-web/search?q=${encodeURIComponent(query)}&limit=${limit}`
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(45000) })
+    const body = await res.json()
+    return body
+  } catch (error) {
+    return { ok: false, error: String(error && error.message ? error.message : error) }
+  }
+}
+
 async function statusPayload() {
   const [live, build, mainStatus, health] = await Promise.all([
     readState('api-live.json'),
@@ -269,10 +280,58 @@ export function apply(ctx) {
       },
     }
 
+    const searchTool = {
+      name: 'workbench_web_search',
+      description: '通过工作台的 ctx.web 执行一次网页搜索（工作台插件提供的能力，主驾不装搜索插件）。返回标题/链接/摘要。',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['query'],
+        properties: {
+          query: { type: 'string' },
+          limit: { type: 'number' },
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          required: ['ok', 'sources'],
+          properties: {
+            ok: { type: 'boolean' },
+            query: { type: 'string' },
+            sources: { type: 'array', items: { type: 'object', additionalProperties: true } },
+            error: { type: 'string' },
+          },
+        },
+        render: (_args, value) => {
+          if (!value.ok) return [{ type: 'text', text: `工作台搜索失败：${value.error ?? '未知错误'}` }]
+          const lines = (value.sources || []).map((s, i) => `${i + 1}. ${s.title || s.url}\n   ${s.url}`)
+          return [{ type: 'text', text: `工作台搜索「${value.query}」→ ${(value.sources || []).length} 条\n` + lines.join('\n') }]
+        },
+      },
+      async execute(args) {
+        const limit = Math.min(Math.max(Number(args.limit) || 5, 1), 20)
+        const body = await wbSearch(String(args.query), limit)
+        if (!body || body.ok !== true) {
+          return { ok: false, sources: [], error: String((body && body.error) || '工作台不可达或未返回结果') }
+        }
+        return {
+          ok: true,
+          query: body.query,
+          sources: (body.sources || []).map((s) => ({ url: s.url, title: s.title ?? null })),
+        }
+      },
+      presentCall() {
+        return { card: 'generic', title: 'workbench_web_search', kind: 'read' }
+      },
+    }
+
     ctx.effect(() => tools.register(statusTool))
     ctx.effect(() => tools.register(apiTool))
     ctx.effect(() => tools.register(pluginsTool))
-    ctx.logger?.info?.('wb-bridge: tools workbench_status / workbench_api / workbench_plugins ready')
+    ctx.effect(() => tools.register(searchTool))
+    ctx.logger?.info?.('wb-bridge: tools workbench_status / workbench_api / workbench_plugins / workbench_web_search ready')
   } else {
     ctx.logger?.warn?.('wb-bridge: tools service unavailable')
   }
