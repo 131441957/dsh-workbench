@@ -1,51 +1,74 @@
 /* ────────────────────────────────────────────────────────────────
  * 工作台 UI 注入脚本（改完刷新页面即生效；删掉本文件即完全恢复原样）
  *
- * 注意：这里跑在工作台页面的全局作用域，能做任意 DOM 操作。
- * 只在这里折腾工作台，别把东西写到安装目录。
+ * 改造目标：把原版左侧栏换成顶部横向导航条。
+ * 思路：不重写任何面板逻辑——只把原侧栏藏起来，另建一条顶栏，
+ *       顶栏按钮点击时转去点原侧栏里的同名入口（DOM click 对隐藏元素同样有效）。
  * ──────────────────────────────────────────────────────────────── */
 
 ;(() => {
   const LABEL = 'wb-ui'
-  const state = { hidden: [], sweeps: 0, dismissed: 0 }
+  const state = { hidden: [], sweeps: 0, dismissed: 0, topbar: false }
   window.__WB_UI__ = state
   window.__wbSweep = () => sweep()
   console.info('[wb-ui] injected')
 
-  // ── 一个 !important 的隐藏类：React 重绘会冲掉内联 style，但每次 swept 都会补
+  // ── 0) 基础样式 ─────────────────────────────────────────────────────
   const style = document.createElement('style')
   style.id = 'wb-ui-hide-style'
-  style.textContent = '.wb-hidden{display:none!important}'
+  style.textContent = `
+    .wb-hidden { display: none !important; }
+    #wb-topbar {
+      position: fixed; top: 0; left: 0; right: 0; height: 46px;
+      display: flex; align-items: center; gap: 6px; padding: 0 12px;
+      background: var(--dsw-alias-bg-base, #16181d);
+      border-bottom: 1px solid var(--dsw-alias-border-secondary, #2a2e37);
+      z-index: 2147482000; box-sizing: border-box;
+      font: 12px/1 "Segoe UI", system-ui, sans-serif;
+    }
+    #wb-topbar .wb-brand {
+      font-weight: 600; letter-spacing: .3px; margin-right: 10px;
+      color: var(--dsw-alias-label-primary, #e6e6e6); white-space: nowrap;
+    }
+    #wb-topbar .wb-brand small { font-weight: 400; opacity: .55; margin-left: 6px; font-size: 10px; }
+    #wb-topbar button.wb-tab {
+      border: 1px solid transparent; background: transparent; cursor: pointer;
+      padding: 6px 12px; border-radius: 7px; font: inherit;
+      color: var(--dsw-alias-label-secondary, #9aa0aa);
+    }
+    #wb-topbar button.wb-tab:hover { background: var(--dsw-alias-bg-secondary, #22262e); color: var(--dsw-alias-label-primary, #e6e6e6); }
+    #wb-topbar button.wb-tab.wb-active {
+      background: var(--dsw-alias-bg-secondary, #22262e);
+      color: var(--dsw-alias-label-primary, #e6e6e6);
+      border-color: var(--dsw-alias-border-secondary, #2a2e37);
+    }
+    #wb-topbar .wb-spacer { flex: 1; }
+    #wb-topbar .wb-dot { width: 7px; height: 7px; border-radius: 50%; background: #4caf50; opacity: .8; }
+    .wb-topbar-offset { padding-top: 46px !important; box-sizing: border-box; }
+  `
   const attachStyle = () => {
     if (!document.head.contains(style)) document.head.appendChild(style)
   }
 
-  // ── 1) 自动关掉「预览版说明」弹窗 ────────────────────────────────────
+  const textOf = (el) => (el.textContent || '').replace(/\s+/g, '').trim()
+
+  // ── 1) 关掉「预览版说明」弹窗 ────────────────────────────────────────
   const DISMISS_TEXTS = ['继续']
   let tries = 0
   const dismiss = () => {
     tries += 1
     if (tries > 40) return
-    const buttons = Array.from(document.querySelectorAll('button'))
-    const target = buttons.find((btn) => {
-      const text = (btn.textContent || '').replace(/\s+/g, '').trim()
-      if (!DISMISS_TEXTS.includes(text)) return false
+    const target = Array.from(document.querySelectorAll('button')).find((btn) => {
+      if (!DISMISS_TEXTS.includes(textOf(btn))) return false
       return Boolean(btn.closest('[role="dialog"], dialog, [class*="modal" i], [class*="dialog" i]'))
     })
-    if (target && target.offsetParent !== null) {
-      target.click()
-      state.dismissed += 1
-    }
+    if (target && target.offsetParent !== null) { target.click(); state.dismissed += 1 }
     setTimeout(dismiss, 500)
   }
 
-  // ── 2) 隐藏工作台用不到的原版入口（只隐藏，不禁用插件）────────────────
-  // 禁用「提供服务」的插件会让其它插件 pending（例如 ui-workspace 提供 uiWorkspace）。
+  // ── 2) 隐藏用不到的原版入口 + 静音无 agent 的报错 toast ───────────────
   const HIDE_TEXTS = ['插件', '自动化任务', '工作区', '默认工作区', '新会话']
-  // 应用在没有 agent 时自己会尝试新建会话并弹一个错误 toast，一并压掉
   const SILENCE_TEXTS = ['新建会话失败', 'no agent factory', 'gateway/internal failed']
-
-  const textOf = (el) => (el.textContent || '').replace(/\s+/g, '').trim()
 
   const hide = (el) => {
     if (!el) return
@@ -58,44 +81,133 @@
   const sweep = () => {
     state.sweeps += 1
     attachStyle()
-    const nodes = document.querySelectorAll('button, a, [role="button"], [role="listitem"], li, div, span')
-    for (const node of nodes) {
-      if (node.closest('#wb-ui-hide-style')) continue
+    for (const node of document.querySelectorAll('button, a, [role="button"], [role="listitem"], li, div, span')) {
       const text = textOf(node)
       if (!text || text.length > 24) continue
       if (HIDE_TEXTS.includes(text)) {
         hide(node.closest('button, a, [role="button"], [role="listitem"], li') || node)
         continue
       }
-      if (SILENCE_TEXTS.some((needle) => text.includes(needle))) {
-        // toast 一般是个浮层：往上找到定位容器再隐藏
+      if (SILENCE_TEXTS.some((n) => text.includes(n))) {
         hide(node.closest('[role="status"], [role="alert"], [class*="toast" i], [class*="alert" i]') || node)
       }
     }
+    placeTopbar()
   }
 
+  // ── 3) 把侧栏藏起来，换成顶部导航 ────────────────────────────────────
+  const TABS = ['接口浏览器', '主驾会话', '设置']
+
+  const findButton = (text) =>
+    Array.from(document.querySelectorAll('button, a, [role="button"]')).find((el) => textOf(el) === text)
+
+  // 找“原侧栏”：从「设置」入口往上走，取那个窄而高的容器
+  const findSidebar = () => {
+    const anchor = findButton('设置')
+    if (!anchor) return null
+    let node = anchor
+    for (let depth = 0; depth < 8 && node; depth += 1) {
+      const rect = node.getBoundingClientRect()
+      if (rect.height > window.innerHeight * 0.6 && rect.width > 120 && rect.width < 420) return node
+      node = node.parentElement
+    }
+    return null
+  }
+
+  const clickTab = (text) => {
+    const btn = findButton(text)
+    if (btn) { btn.click(); markActive(text) }
+  }
+
+  const markActive = (text) => {
+    const bar = document.getElementById('wb-topbar')
+    if (!bar) return
+    for (const tab of bar.querySelectorAll('button.wb-tab')) {
+      tab.classList.toggle('wb-active', tab.dataset.wbTab === text)
+    }
+  }
+
+  const buildTopbar = () => {
+    if (document.getElementById('wb-topbar')) return document.getElementById('wb-topbar')
+    const bar = document.createElement('div')
+    bar.id = 'wb-topbar'
+    const brand = document.createElement('div')
+    brand.className = 'wb-brand'
+    brand.innerHTML = 'DSH 工作台<small>59430</small>'
+    bar.appendChild(brand)
+
+    for (const text of TABS) {
+      const btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'wb-tab'
+      btn.dataset.wbTab = text
+      btn.textContent = text
+      btn.addEventListener('click', () => clickTab(text))
+      bar.appendChild(btn)
+    }
+
+    const spacer = document.createElement('div')
+    spacer.className = 'wb-spacer'
+    bar.appendChild(spacer)
+
+    const dot = document.createElement('span')
+    dot.className = 'wb-dot'
+    dot.title = '工作台在线'
+    bar.appendChild(dot)
+
+    document.body.appendChild(bar)
+    state.topbar = true
+    return bar
+  }
+
+  // 让主内容区给顶栏留出高度
+  const offsetMain = () => {
+    const bar = document.getElementById('wb-topbar')
+    if (!bar) return
+    const h = bar.getBoundingClientRect().height || 46
+    const sidebar = findSidebar()
+    const main = sidebar ? sidebar.nextElementSibling : null
+    const root = document.body.firstElementChild
+    for (const el of [main, root].filter(Boolean)) {
+      if (el.id === 'wb-topbar') continue
+      el.classList.add('wb-topbar-offset')
+      el.style.setProperty('padding-top', `${h}px`, 'important')
+    }
+  }
+
+  const placeTopbar = () => {
+    // 侧栏还在就藏掉（只藏、不禁用插件——禁用一个提供服务的插件会让整页崩）
+    const sidebar = findSidebar()
+    if (sidebar) hide(sidebar)
+    buildTopbar()
+    offsetMain()
+    if (!state.activeMarked && findButton('接口浏览器')) {
+      state.activeMarked = true
+      markActive('接口浏览器')
+    }
+  }
+
+  // ── 4) 默认打开「接口浏览器」───────────────────────────────────────
+  let defaulted = false
+  const openDefault = () => {
+    if (defaulted) return
+    if (!/选择工作区|探索未至之境/.test(document.body ? document.body.innerText : '')) return
+    const btn = findButton('接口浏览器')
+    if (!btn) return
+    defaulted = true
+    btn.click()
+    markActive('接口浏览器')
+  }
+
+  // ── 5) 启动 ────────────────────────────────────────────────────────
+  let pending = false
   const observe = () => {
-    let pending = false
     const observer = new MutationObserver(() => {
       if (pending) return
       pending = true
       setTimeout(() => { pending = false; sweep() }, 200)
     })
     observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] })
-  }
-
-  // ── 3) 默认打开「接口浏览器」，别停在没用的会话空状态 ────────────────
-  const DEFAULT_PANEL = '接口浏览器'
-  let defaulted = false
-  const isConversationLanding = () => /选择工作区|探索未至之境/.test(document.body ? document.body.innerText : '')
-  const openDefaultPanel = () => {
-    if (defaulted) return
-    if (!isConversationLanding()) return
-    const entry = Array.from(document.querySelectorAll('button, a, [role="button"]'))
-      .find((el) => textOf(el) === DEFAULT_PANEL)
-    if (!entry) return
-    defaulted = true
-    entry.click()
   }
 
   const boot = () => {
@@ -105,9 +217,9 @@
     observe()
     setTimeout(sweep, 300)
     setTimeout(sweep, 1200)
-    setTimeout(() => { sweep(); openDefaultPanel() }, 800)
-    setTimeout(() => { sweep(); openDefaultPanel() }, 2000)
-    setInterval(sweep, 2000)
+    setTimeout(() => { sweep(); openDefault() }, 900)
+    setTimeout(() => { sweep(); openDefault() }, 2200)
+    setInterval(() => { sweep(); offsetMain() }, 2000)
   }
 
   if (document.readyState === 'loading') {
