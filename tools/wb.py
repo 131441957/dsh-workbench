@@ -56,6 +56,9 @@ LEVELS = ["soul", "user", "project", "fact", "lesson", "topic", "rules"]
 
 DETACHED = 0x00000008
 NO_WINDOW = 0x08000000
+# 重要：pythonw 起进程时若不带 CREATE_NO_WINDOW，每 spawn 一个控制台程序
+# （netstat/taskkill/powershell…）桌面就会闪一个黑窗。所有 subprocess 都必须带上它。
+RUNFLAGS = NO_WINDOW
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
@@ -94,7 +97,8 @@ def pid_alive(pid: int) -> bool:
 
 def netstat_listen() -> list[tuple[int, int]]:
     try:
-        out = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True, timeout=15).stdout
+        out = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True, text=True,
+                             timeout=15, creationflags=RUNFLAGS, encoding="utf-8", errors="replace").stdout
     except Exception:
         return []
     rows = []
@@ -112,6 +116,16 @@ def listening_pids(port: int) -> list[int]:
     return [pid for p, pid in netstat_listen() if p == port]
 
 
+def port_open(port: int, timeout: float = 0.3) -> bool:
+    """不 spawn 任何子进程的端口探测（看门狗必须用它，否则桌面会闪黑窗）。"""
+    import socket
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def main_harness_ports() -> list[int]:
     env_url = os.environ.get("DSH_WEB_URL", "")
     if ":" in env_url:
@@ -122,7 +136,8 @@ def main_harness_ports() -> list[int]:
         ps = subprocess.run(
             ["powershell", "-NoProfile", "-Command",
              "(Get-Process -Name 'DeepSeek Harness' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id) -join ','"],
-            capture_output=True, text=True, timeout=20,
+            capture_output=True, text=True, timeout=20, creationflags=RUNFLAGS,
+            encoding="utf-8", errors="replace",
         ).stdout.strip()
         app_pids = {int(x) for x in ps.split(",") if x.strip().isdigit()}
     except Exception:
@@ -135,7 +150,7 @@ def main_harness_ports() -> list[int]:
 def kill_tree(pid: int) -> bool:
     try:
         subprocess.run([str(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "taskkill.exe"),
-                        "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=25)
+                        "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=25, creationflags=RUNFLAGS)
         return True
     except Exception:
         return False
@@ -203,7 +218,7 @@ def cmd_sync_app(force: bool = False) -> int:
     started = time.time()
     rc = subprocess.run(
         ["robocopy", str(MAIN_INSTALL), str(APP_ROOT), "/E", "/NFL", "/NDL", "/NJH", "/NJS", "/R:1", "/W:1"],
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=RUNFLAGS,
     ).returncode
     if rc > 7:
         bad(f"robocopy 失败（退出码 {rc}）")
@@ -237,7 +252,7 @@ def ensure_profile() -> int:
         subprocess.run(["cmd", "/c", str(APP_DSH_CMD), "--profile", WB_PROFILE,
                         "--from-default-profile", "web", "--dump-config"],
                        env=env, capture_output=True, text=True,
-                       encoding="utf-8", errors="replace", timeout=180)
+                       encoding="utf-8", errors="replace", timeout=180, creationflags=RUNFLAGS)
     if not pkg.exists():
         bad(f"profile 创建失败：{pkg}")
         return 1
@@ -345,7 +360,7 @@ def cmd_restart(with_watchdog: bool = True) -> int:
 
 
 # ── 看门狗：主驾一死就关工作台 ──────────────────────────────────────────
-def cmd_watchdog(main_pids: list[int], interval: float = 4.0) -> int:
+def cmd_watchdog(main_pids: list[int], interval: float = 8.0) -> int:
     log = LOG_DIR / "watchdog.log"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -357,7 +372,8 @@ def cmd_watchdog(main_pids: list[int], interval: float = 4.0) -> int:
     note(f"watchdog start, main pids={main_pids}, wb port={WB_PORT}")
     while True:
         time.sleep(interval)
-        if not listening_pids(WB_PORT):
+        # 全部用 socket + ctypes，不 spawn 子进程：桌面不会再闪窗
+        if not port_open(WB_PORT):
             note("workbench not listening any more → watchdog exit")
             return 0
         alive = [pid for pid in main_pids if pid_alive(pid)]
@@ -379,7 +395,8 @@ def cmd_doctor() -> int:
     (ok if PNPM_MJS.exists() else bad)(f"pnpm.mjs    {PNPM_MJS}")
     (ok if GIT_EXE.exists() else warn)(f"git         {GIT_EXE}")
     try:
-        pipv = subprocess.run([sys.executable, "-m", "pip", "--version"], capture_output=True, text=True, timeout=25).stdout.strip()
+        pipv = subprocess.run([sys.executable, "-m", "pip", "--version"], capture_output=True, text=True,
+                              timeout=25, creationflags=RUNFLAGS, encoding="utf-8", errors="replace").stdout.strip()
     except Exception:
         pipv = ""
     (ok if pipv else warn)(f"pip         {pipv or '不可用'}")
