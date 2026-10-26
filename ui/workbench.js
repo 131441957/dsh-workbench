@@ -7,110 +7,107 @@
 
 ;(() => {
   const LABEL = 'wb-ui'
-  window.__WB_UI__ = {
-    injected: true,
-    at: new Date().toISOString(),
-    label: LABEL,
-    hidden: [],
+  const state = { hidden: [], sweeps: 0, dismissed: 0 }
+  window.__WB_UI__ = state
+  window.__wbSweep = () => sweep()
+  console.info('[wb-ui] injected')
+
+  // ── 一个 !important 的隐藏类：React 重绘会冲掉内联 style，但每次 swept 都会补
+  const style = document.createElement('style')
+  style.id = 'wb-ui-hide-style'
+  style.textContent = '.wb-hidden{display:none!important}'
+  const attachStyle = () => {
+    if (!document.head.contains(style)) document.head.appendChild(style)
   }
-  console.info('[wb-ui] injected at', window.__WB_UI__.at)
 
-  // ── 1) 自动关掉「预览版说明」弹窗（双保险）──────────────────────────
-  // 首选方案：包补丁里写死 welcomeNoticeVersion（等价于点过「继续」）。
-  // 这里兜一层：万一版本号变了 / 又弹出来，自动点掉那个「继续」按钮。
+  // ── 1) 自动关掉「预览版说明」弹窗 ────────────────────────────────────
   const DISMISS_TEXTS = ['继续']
-  const MAX_TRIES = 40
   let tries = 0
-
   const dismiss = () => {
     tries += 1
-    if (tries > MAX_TRIES) return
+    if (tries > 40) return
     const buttons = Array.from(document.querySelectorAll('button'))
     const target = buttons.find((btn) => {
-      const text = (btn.textContent || '').trim()
+      const text = (btn.textContent || '').replace(/\s+/g, '').trim()
       if (!DISMISS_TEXTS.includes(text)) return false
       return Boolean(btn.closest('[role="dialog"], dialog, [class*="modal" i], [class*="dialog" i]'))
     })
     if (target && target.offsetParent !== null) {
       target.click()
-      console.info('[wb-ui] dismissed preview notice')
+      state.dismissed += 1
     }
-    if (tries < MAX_TRIES) setTimeout(dismiss, 500)
+    setTimeout(dismiss, 500)
   }
 
-  // ── 2) 隐藏工作台用不到的原版入口 ────────────────────────────────────
-  // 只做“看不见”，不禁用插件——禁用一个提供服务的插件（如 ui-workspace 提供
-  // uiWorkspace）会连带 11 个插件 pending，整页报 "entries did not activate"。
+  // ── 2) 隐藏工作台用不到的原版入口（只隐藏，不禁用插件）────────────────
+  // 禁用「提供服务」的插件会让其它插件 pending（例如 ui-workspace 提供 uiWorkspace）。
   const HIDE_TEXTS = ['插件', '自动化任务', '工作区', '默认工作区', '新会话']
+  // 应用在没有 agent 时自己会尝试新建会话并弹一个错误 toast，一并压掉
+  const SILENCE_TEXTS = ['新建会话失败', 'no agent factory', 'gateway/internal failed']
 
-  const hideEntry = (el) => {
-    if (!el || el.dataset.wbHidden === '1') return
-    el.dataset.wbHidden = '1'
-    el.style.display = 'none'
-    window.__WB_UI__.hidden.push((el.textContent || '').trim().slice(0, 20))
+  const textOf = (el) => (el.textContent || '').replace(/\s+/g, '').trim()
+
+  const hide = (el) => {
+    if (!el) return
+    el.classList.add('wb-hidden')
+    el.style.setProperty('display', 'none', 'important')
+    const t = textOf(el).slice(0, 16)
+    if (t && !state.hidden.includes(t)) state.hidden.push(t)
   }
 
   const sweep = () => {
-    const nodes = document.querySelectorAll('button, a, [role="button"], [role="listitem"], li, div')
+    state.sweeps += 1
+    attachStyle()
+    const nodes = document.querySelectorAll('button, a, [role="button"], [role="listitem"], li, div, span')
     for (const node of nodes) {
-      if (node.dataset.wbHidden === '1') continue
-      const text = (node.textContent || '').trim()
-      if (!text || text.length > 12) continue
-      if (!HIDE_TEXTS.includes(text)) continue
-      // 只在“侧栏/导航”的最小可点单元上动手，避免误伤正文
-      const target = node.closest('button, a, [role="button"], [role="listitem"], li') || node
-      hideEntry(target)
-    }
-    // 工作区区块标题下面紧跟着的会话/工作区行也一并隐藏
-    for (const node of document.querySelectorAll('[data-wb-hidden="1"]')) {
-      const parent = node.parentElement
-      if (!parent) continue
-      if ((node.textContent || '').trim() === '工作区') {
-        for (const sibling of parent.querySelectorAll(':scope > *')) {
-          const t = (sibling.textContent || '').trim()
-          if (t && t.length < 24 && /工作区/.test(t)) hideEntry(sibling)
-        }
+      if (node.closest('#wb-ui-hide-style')) continue
+      const text = textOf(node)
+      if (!text || text.length > 24) continue
+      if (HIDE_TEXTS.includes(text)) {
+        hide(node.closest('button, a, [role="button"], [role="listitem"], li') || node)
+        continue
+      }
+      if (SILENCE_TEXTS.some((needle) => text.includes(needle))) {
+        // toast 一般是个浮层：往上找到定位容器再隐藏
+        hide(node.closest('[role="status"], [role="alert"], [class*="toast" i], [class*="alert" i]') || node)
       }
     }
   }
 
-  const scheduleSweep = () => {
-    sweep()
-    // 单页应用会重绘，用 MutationObserver 循环补刀（节流 300ms）
+  const observe = () => {
     let pending = false
     const observer = new MutationObserver(() => {
       if (pending) return
       pending = true
-      setTimeout(() => { pending = false; sweep() }, 300)
+      setTimeout(() => { pending = false; sweep() }, 200)
     })
-    observer.observe(document.body, { childList: true, subtree: true })
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] })
   }
 
   // ── 3) 默认打开「接口浏览器」，别停在没用的会话空状态 ────────────────
-  // 工作台没有 agent，会话首页只会显示“选择工作区开始”，没有任何用。
   const DEFAULT_PANEL = '接口浏览器'
   let defaulted = false
-
-  const isConversationLanding = () => {
-    const text = document.body ? document.body.innerText : ''
-    return /选择工作区|探索未至之境/.test(text)
-  }
-
+  const isConversationLanding = () => /选择工作区|探索未至之境/.test(document.body ? document.body.innerText : '')
   const openDefaultPanel = () => {
-    if (defaulted || !isConversationLanding()) return
+    if (defaulted) return
+    if (!isConversationLanding()) return
     const entry = Array.from(document.querySelectorAll('button, a, [role="button"]'))
-      .find((el) => (el.textContent || '').trim() === DEFAULT_PANEL)
+      .find((el) => textOf(el) === DEFAULT_PANEL)
     if (!entry) return
     defaulted = true
     entry.click()
-    console.info('[wb-ui] default panel ->', DEFAULT_PANEL)
   }
 
   const boot = () => {
+    attachStyle()
     dismiss()
-    scheduleSweep()
-    setTimeout(openDefaultPanel, 800)
-    setTimeout(openDefaultPanel, 2000)
+    sweep()
+    observe()
+    setTimeout(sweep, 300)
+    setTimeout(sweep, 1200)
+    setTimeout(() => { sweep(); openDefaultPanel() }, 800)
+    setTimeout(() => { sweep(); openDefaultPanel() }, 2000)
+    setInterval(sweep, 2000)
   }
 
   if (document.readyState === 'loading') {
