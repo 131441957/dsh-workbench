@@ -1172,7 +1172,10 @@ def cmd_start(with_watchdog: bool = True) -> int:
 
     ok(f"端口 {WB_PORT} 已监听")
 
-    pids = {"serve": serve.pid, "watchdog": 0, "startedAt": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    pids = read_pids()
+    kept_supervisor = int(pids.get("supervisor") or 0)
+    pids = {"serve": serve.pid, "watchdog": 0, "supervisor": kept_supervisor,
+            "startedAt": time.strftime("%Y-%m-%dT%H:%M:%S")}
     if with_watchdog:
         main_ports = main_harness_ports()
         main_pids = sorted({pid for p in main_ports for pid in listening_pids(p)})
