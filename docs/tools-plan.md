@@ -210,3 +210,9 @@ java        缺失
 - 工作台代理新增 `GET /wb-sessions/events`：带上 token 转发主驾的 SSE 流，浏览器断开时 abort 上游。
 - 会话面板改用 `EventSource('/wb-sessions/events')`：会话数或运行中数量变化时自动刷新列表与当前会话历史；SSE 未连上时退回 10 秒轮询。面板顶部显示「主驾 N 会话 · M 运行」。
 - 生效条件：桥是主驾侧的 host 代码 → **需要重启一次主程序**。重启前代理返回 404（上游还没有该路由）。
+
+## 备份范围补充（2026-10-26）
+
+- `wb.py backup` 现在额外收 `home\storages\*.json`（目前只有 `workspace.json`，工作区注册表）。
+- **`.credentials.yaml` 永不入快照**（含 API Key）；工作台本身没有 sessions 数据（会话都在主驾）。
+- 最新基线：`snapshot-20261026-222656.zip`（45 文件 / 91.9 KB），旧快照继续保留。

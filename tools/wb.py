@@ -985,6 +985,12 @@ def _backup_entries() -> list[tuple[Path, str]]:
         p = prof / name
         if p.exists():
             out.append((p, f"home/profiles/{WB_PROFILE}/{name}"))
+    # 工作台没有会话数据（会话都在主驾），home 里唯一值得备份的是 storages 下的 json
+    # （工作区注册表等）。.credentials.yaml 含 API Key，绝不入快照。
+    storages = WB_HOME / "storages"
+    if storages.exists():
+        for p in sorted(storages.glob("*.json")):
+            out.append((p, f"home/storages/{p.name}"))
     return out
 
 
