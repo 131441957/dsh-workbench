@@ -1,0 +1,180 @@
+{
+  "createdAt": "2026-10-26T20:35:00",
+  "note": "webui 注入前的基线",
+  "gitHead": "5fceb63",
+  "versions": {
+    "main": "0.2.1-alpha.1",
+    "workbench": "0.2.1-alpha.1"
+  },
+  "paths": {
+    "root": "E:\\DSH-WORKBENCH",
+    "profile": "home/profiles/bench"
+  },
+  "fileCount": 31,
+  "totalBytes": 216438,
+  "files": [
+    {
+      "arc": "tools/collect-live-api.py",
+      "size": 3949,
+      "sha256": "6cd92a033870ac6d1b51400716f5982c8bdc4273419b41175831acf92ae10068"
+    },
+    {
+      "arc": "tools/wb.py",
+      "size": 70262,
+      "sha256": "ef7e72cac5a7cfb544b8b44012dcdc762e38fc0cedc9b958c09715b0a9baf1ec"
+    },
+    {
+      "arc": "tools/wb_gui.py",
+      "size": 8715,
+      "sha256": "8de4f8c5bc238fc3474d7eb35aa5ca5f24f80a1f2892610f98f571d30774db30"
+    },
+    {
+      "arc": "tools/__pycache__/wb.cpython-310.pyc",
+      "size": 63192,
+      "sha256": "25b372fbd266cb5d6aed7d5cbe7ca361e5664ec48145b87a9e9edd9d0769f131"
+    },
+    {
+      "arc": "tools/__pycache__/wb_gui.cpython-310.pyc",
+      "size": 9293,
+      "sha256": "e4f6239b8da48421418544049ebeaf62664c6a387d2c203b34351580a1040649"
+    },
+    {
+      "arc": "plugins/dsh-wb-api-browser/client.js",
+      "size": 9779,
+      "sha256": "93c21d37c12fb80567443b2c8dd4fabbc8c7c11c2725c90274cc5474050f9272"
+    },
+    {
+      "arc": "plugins/dsh-wb-api-browser/cordis.patch.yml",
+      "size": 148,
+      "sha256": "b24f868673a3d66b876fc40e7b56ffd22cc1d357a41a5b14b84c2b9266cd69c2"
+    },
+    {
+      "arc": "plugins/dsh-wb-api-browser/index.js",
+      "size": 3101,
+      "sha256": "c846c0c58587aa4ba26b370dfc6730091f27220685c2c9c48eef278501e55557"
+    },
+    {
+      "arc": "plugins/dsh-wb-api-browser/package.json",
+      "size": 537,
+      "sha256": "70a6a0d390db4ebae75375ce5e8f487b7d4d4e6191ca1267d3663f907894aaed"
+    },
+    {
+      "arc": "plugins/dsh-wb-web/cordis.patch.yml",
+      "size": 132,
+      "sha256": "9f7743ad79763f6e604975667b9a7e48ee25298ce8d891438c4ee978c286cb17"
+    },
+    {
+      "arc": "plugins/dsh-wb-web/index.js",
+      "size": 3157,
+      "sha256": "ce3e502c973521660792972a1029c62abee46f53e7cc3cae9c90ea81008d739d"
+    },
+    {
+      "arc": "plugins/dsh-wb-web/package.json",
+      "size": 433,
+      "sha256": "68cc01da8a65784171350df875bb4f9e51ed9e9ddfc4b3b7e4fca1c6183e924c"
+    },
+    {
+      "arc": "plugins/dsh-workbench-bridge/client.js",
+      "size": 2698,
+      "sha256": "a5be02f1611a224c68f9704eb89e338a63e5ec1dd6e9b02305578988a774bfab"
+    },
+    {
+      "arc": "plugins/dsh-workbench-bridge/cordis.patch.yml",
+      "size": 148,
+      "sha256": "abc6416d6071c8cd882f7c7f16154c0c062c558faea561077639b19d38fb73bc"
+    },
+    {
+      "arc": "plugins/dsh-workbench-bridge/index.js",
+      "size": 12943,
+      "sha256": "bd95de437c322af1cbf5f79f100d04b2e708941760fd29ca2d2f46d18924c7c5"
+    },
+    {
+      "arc": "plugins/dsh-workbench-bridge/package.json",
+      "size": 542,
+      "sha256": "acc48eba886f85ade2496f368b6258172da55c9943f3e7697727eee7e50c1af3"
+    },
+    {
+      "arc": "seeds/bench/cordis.patch.yml",
+      "size": 243,
+      "sha256": "478991daa2967cb9bebad051e3318055b47f4c10392b22a54f4fe2a899959798"
+    },
+    {
+      "arc": "seeds/bench/package.json",
+      "size": 319,
+      "sha256": "e71dd931f44a08961cbda75b1389dd4e71d96cd02fb3a2218c87e0375f7b783a"
+    },
+    {
+      "arc": "seeds/main-profile/cordis.patch.yml",
+      "size": 715,
+      "sha256": "28345def2a59f15f1255e5211e8fc3235a2c2d952e70b06a6ba33ff2af67963d"
+    },
+    {
+      "arc": "seeds/main-profile/package.json",
+      "size": 1710,
+      "sha256": "f2ef5d596f677c124e511396567321be953a35ced08b55ec8f98a3f91ff5a9cc"
+    },
+    {
+      "arc": "seeds/main-profile/README.txt",
+      "size": 240,
+      "sha256": "adec85614a05388722704ce846da248aa6475a4439904e1170cadc8480745cd6"
+    },
+    {
+      "arc": "docs/interface-baseline.md",
+      "size": 9114,
+      "sha256": "d3c597d5f6fef135ba4fa9054ce9830dead0cd3347c05c56d833b46c2b8ea93c"
+    },
+    {
+      "arc": "docs/tools-plan.md",
+      "size": 9921,
+      "sha256": "a4e80ef36567c2f133aba9c792f5f33f83877294eca3dddce7ea6766db29ef90"
+    },
+    {
+      "arc": "docs/upgrade-policy.md",
+      "size": 2543,
+      "sha256": "760475d34f8d38bcad2da9a91890bd96d7b07a9ca676812057084e331e0c6ac4"
+    },
+    {
+      "arc": "ui/landing.html",
+      "size": 980,
+      "sha256": "0fe95e0aa703f2938a0b6b6d2d360eff4c95386bd6b3837aa757b5024da45cae"
+    },
+    {
+      "arc": "config.json",
+      "size": 182,
+      "sha256": "db44ba329c15a2c5a9b9da55f590b7687c96da49a78516030e2dd0da1765c8a6"
+    },
+    {
+      "arc": ".gitignore",
+      "size": 178,
+      "sha256": "5b6cbf826a463ed047f9f8c248bf4e4d9c0aace9ca88212171e95ccf69d96778"
+    },
+    {
+      "arc": "home/profiles/bench/package.json",
+      "size": 421,
+      "sha256": "3fc8beaa2340909403cf92ff400b4e65155755350d8b360c250131bf5a20da81"
+    },
+    {
+      "arc": "home/profiles/bench/cordis.patch.yml",
+      "size": 372,
+      "sha256": "886c93df8e3f82753b37fa4f82731133848c0a1c1db5052ac811d51a7f2a36d4"
+    },
+    {
+      "arc": "home/profiles/bench/pnpm-lock.yaml",
+      "size": 410,
+      "sha256": "401dd6660eeaadc328d5ae4d249f5470a1ae030cee39da34e843efdf9532b9b9"
+    },
+    {
+      "arc": "home/profiles/bench/pnpm-workspace.yaml",
+      "size": 61,
+      "sha256": "ae7c5b68e2f157528e62885804e69e88583897b775e03c86fcbe52feaf498aba"
+    }
+  ],
+  "excluded": [
+    "app/（运行时，可 sync-app 重建）",
+    "home/sessions|storages（数据）",
+    "logs/",
+    "state/",
+    "backups/",
+    "node_modules/"
+  ]
+}

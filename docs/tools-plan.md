@@ -126,3 +126,11 @@ java        缺失
 - **冷却 5 秒** `state\last-open.txt`：5 秒内重复打开会被忽略，杜绝一次弹出多个标签页。
 - **主驾开着但工作台未起** → 拉起守护并最多等 20 秒（守护通常 8 秒内拉起），起来就打开。
 - 历史 bug：以前 `page` 会阻塞等 45 秒且无单实例保护，连点几次后主驾一启动就会同时弹出多个页面。
+
+## 备份与还原（2026-10-26，改 webui 前的保险）
+
+- `wb.py backup --note "说明"` → `backups\snapshot-<时间>.zip`：收 **tools（含安装器 wb_gui.py）、plugins、seeds、docs、ui、config.json、.gitignore、home\profiles\bench 的清单**；不含 app/（1.7GB 运行时，可 sync-app 重建）、home 数据、logs/state/backups、node_modules、__pycache__。
+- 每个文件都记 sha256 进 `MANIFEST.json`，写完**回读校验**；`restore` 前也先校验快照自身完整性。
+- `wb.py backups` 列出快照；`wb.py restore --from <zip|latest>` 还原：先停工作台 → 把当前状态另存 `backups\before-restore-<时间>` → 解包 → 复原 profile → 跑 install。
+- **坑**：快照比修改旧时，restore 会把**代码也回滚**（本会话就被回滚掉了刚加的排除规则）。所以修完代码要重做基线，旧快照该删就删。
+- 运行时另有一份完整备份：`backups\app-0.2.1-alpha.1-*`（10009 文件 / 1691MB），`wb.py rollback` 可秒回。

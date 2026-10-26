@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import hashlib
 import json
 import os
 import re
@@ -30,6 +31,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import zipfile
 from pathlib import Path
 
 # ── 常量 ────────────────────────────────────────────────────────────────
@@ -574,6 +576,7 @@ def cmd_open() -> int:
 
 SUPERVISOR_FILE = STATE_DIR / "supervisor.json"
 LOCK_FILE = STATE_DIR / "page.lock"
+BACKUP_ROOT = WB_ROOT / "backups"
 
 
 def cmd_supervise(interval: float = 8.0) -> int:
@@ -941,6 +944,184 @@ def cmd_info() -> int:
         },
     }
     print(json.dumps(data, ensure_ascii=False))
+    return 0
+
+
+BACKUP_DIRS = ["tools", "plugins", "seeds", "docs", "ui"]
+BACKUP_FILES = ["config.json", ".gitignore"]
+BACKUP_PROFILE_FILES = ["package.json", "cordis.patch.yml", "pnpm-lock.yaml", "pnpm-workspace.yaml"]
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _backup_entries() -> list[tuple[Path, str]]:
+    """要进快照的东西：源码/工具/插件/种子/文档/ui + profile 清单。运行时与 home 数据不进。"""
+    out: list[tuple[Path, str]] = []
+    for name in BACKUP_DIRS:
+        base = WB_ROOT / name
+        if not base.exists():
+            continue
+        for p in base.rglob("*"):
+            if p.is_file() and "node_modules" not in p.parts and "__pycache__" not in p.parts and p.suffix != ".pyc":
+                out.append((p, p.relative_to(WB_ROOT).as_posix()))
+    for name in BACKUP_FILES:
+        p = WB_ROOT / name
+        if p.exists():
+            out.append((p, name))
+    prof = WB_HOME / "profiles" / WB_PROFILE
+    for name in BACKUP_PROFILE_FILES:
+        p = prof / name
+        if p.exists():
+            out.append((p, f"home/profiles/{WB_PROFILE}/{name}"))
+    return out
+
+
+def cmd_backup(note: str = "") -> int:
+    """完整快照（含安装器/工具链），并回读校验每个文件的 sha256。"""
+    head("完整快照")
+    entries = _backup_entries()
+    if not entries:
+        bad("没有可备份的内容")
+        return 1
+    BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    archive = BACKUP_ROOT / f"snapshot-{stamp}.zip"
+
+    files_meta = []
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+        for path, arc in entries:
+            zf.write(path, arc)
+            files_meta.append({"arc": arc, "size": path.stat().st_size, "sha256": _sha256(path)})
+        head_git = ""
+        try:
+            head_git = subprocess.run([str(GIT_EXE), "-C", str(WB_ROOT), "rev-parse", "--short", "HEAD"],
+                                      capture_output=True, text=True, timeout=30,
+                                      creationflags=RUNFLAGS, encoding="utf-8", errors="replace").stdout.strip()
+        except Exception:
+            pass
+        manifest = {
+            "createdAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "note": note,
+            "gitHead": head_git,
+            "versions": {"main": main_version(), "workbench": app_version()},
+            "paths": {"root": str(WB_ROOT), "profile": f"home/profiles/{WB_PROFILE}"},
+            "fileCount": len(files_meta),
+            "totalBytes": sum(m["size"] for m in files_meta),
+            "files": files_meta,
+            "excluded": ["app/（运行时，可 sync-app 重建）", "home/sessions|storages（数据）", "logs/", "state/", "backups/", "node_modules/"],
+        }
+        zf.writestr("MANIFEST.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+
+    # 回读校验
+    bad_files = []
+    with zipfile.ZipFile(archive) as zf:
+        names = set(zf.namelist())
+        for meta in files_meta:
+            if meta["arc"] not in names:
+                bad_files.append(meta["arc"] + "（缺失）")
+                continue
+            with zf.open(meta["arc"]) as fh:
+                h = hashlib.sha256()
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    h.update(chunk)
+            if h.hexdigest() != meta["sha256"]:
+                bad_files.append(meta["arc"] + "（哈希不符）")
+
+    size = archive.stat().st_size
+    ok(f"快照 {archive.name}（{len(files_meta)} 文件 / 压缩后 {size / 1024:.1f} KB）")
+    ok(f"含：工具链 {len([e for e in entries if e[1].startswith('tools/')])} 个（含安装器 wb_gui.py）、"
+       f"插件 {len([e for e in entries if e[1].startswith('plugins/')])} 个、"
+       f"种子 {len([e for e in entries if e[1].startswith('seeds/')])} 个、"
+       f"文档 {len([e for e in entries if e[1].startswith('docs/')])} 个")
+    if bad_files:
+        bad(f"校验失败 {len(bad_files)} 个：{', '.join(bad_files[:5])}")
+        return 1
+    ok("回读校验通过（每个文件的 sha256 都对上了）")
+    info(f"回滚：wb.py restore --from {archive.name}")
+    return 0
+
+
+def cmd_backups() -> int:
+    head("已有快照")
+    if not BACKUP_ROOT.exists():
+        warn("还没有快照：wb.py backup")
+        return 0
+    items = sorted(BACKUP_ROOT.glob("snapshot-*.zip"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not items:
+        warn("还没有快照")
+        return 0
+    for p in items:
+        note = ""
+        try:
+            with zipfile.ZipFile(p) as zf:
+                note = json.loads(zf.read("MANIFEST.json").decode("utf-8")).get("note", "")
+        except Exception:
+            pass
+        info(f"{p.name}  {p.stat().st_size / 1024:.1f} KB  {time.strftime('%Y-%m-%d %H:%M', time.localtime(p.stat().st_mtime))}  {note}")
+    return 0
+
+
+def cmd_restore(target: str = "latest") -> int:
+    """从快照还原工具/插件/种子/文档/ui/profile（不动 app/ 与 home 数据）。"""
+    head("从快照还原")
+    if not target or target == "latest":
+        items = sorted(BACKUP_ROOT.glob("snapshot-*.zip"), key=lambda p: p.stat().st_mtime, reverse=True) if BACKUP_ROOT.exists() else []
+        if not items:
+            bad("没有快照可用")
+            return 1
+        archive = items[0]
+    else:
+        archive = BACKUP_ROOT / target if (BACKUP_ROOT / target).exists() else Path(target)
+    if not archive.exists():
+        bad(f"找不到快照：{archive}")
+        return 1
+    info(f"使用 {archive.name}")
+
+    with zipfile.ZipFile(archive) as zf:
+        manifest = json.loads(zf.read("MANIFEST.json").decode("utf-8"))
+        broken = []
+        for meta in manifest.get("files", []):
+            with zf.open(meta["arc"]) as fh:
+                h = hashlib.sha256()
+                for chunk in iter(lambda: fh.read(1 << 20), b""):
+                    h.update(chunk)
+            if h.hexdigest() != meta["sha256"]:
+                broken.append(meta["arc"])
+        if broken:
+            bad(f"快照自身损坏（{len(broken)} 个文件哈希不符），中止还原")
+            return 1
+        ok(f"快照校验通过（{manifest.get('fileCount')} 文件，创建于 {manifest.get('createdAt')}）")
+
+        cmd_stop()
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        safety = BACKUP_ROOT / f"before-restore-{stamp}"
+        safety.mkdir(parents=True, exist_ok=True)
+        for name in BACKUP_DIRS + BACKUP_FILES:
+            src = WB_ROOT / name
+            if src.exists():
+                dst = safety / name
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                if src.is_dir():
+                    shutil.copytree(src, dst)
+                else:
+                    shutil.copy2(src, dst)
+        ok(f"当前状态已另存 → {safety}")
+
+        zf.extractall(WB_ROOT)
+        ok("快照已还原到工作台根目录")
+
+    if ensure_profile() != 0:
+        warn("profile 复原失败，检查 seeds/bench 与快照内容")
+    else:
+        ok("profile 复原完成")
+    cmd_install(False)
+    ok("还原完成（如需回滚这次还原，把 before-restore-<时间> 里的文件拷回去即可）")
     return 0
 
 
@@ -1519,6 +1700,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--redetect", action="store_true")
     ap.add_argument("--install", default="")
     ap.add_argument("--home", default="")
+    ap.add_argument("--note", default="")
+    ap.add_argument("--from", dest="from_archive", default="latest")
     ap.add_argument("-n", type=int, default=40)
     args = ap.parse_args(argv[1:])
 
@@ -1546,6 +1729,9 @@ def main(argv: list[str]) -> int:
         "install": lambda: cmd_install(args.force),
         "paths": lambda: cmd_paths(args.redetect, args.install or None, args.home or None),
         "info": lambda: cmd_info(),
+        "backup": lambda: cmd_backup(args.note),
+        "backups": lambda: cmd_backups(),
+        "restore": lambda: cmd_restore(args.from_archive),
         "rollback": lambda: cmd_rollback(),
         "sync-app": lambda: cmd_sync_app(args.force),
         "start": lambda: cmd_start(args.with_watchdog),
