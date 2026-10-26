@@ -230,6 +230,67 @@ def write_pids(data: dict) -> None:
 
 
 # ── 核心：安装同步 ──────────────────────────────────────────────────────
+def bench_profile_json() -> Path:
+    return WB_HOME / "profiles" / WB_PROFILE / "package.json"
+
+
+def cmd_plugins(action: str = "list", spec: str = "", bundle: str = "") -> int:
+    """工作台插件管理：list / install / add。"""
+    pkg_path = bench_profile_json()
+    if not pkg_path.exists():
+        bad(f"profile 清单不存在：{pkg_path}")
+        return 1
+    data = json.loads(pkg_path.read_text(encoding="utf-8"))
+    deps = data.setdefault("dependencies", {})
+    bundles = data.setdefault("dsh", {}).setdefault("profile", {}).setdefault("bundles", [])
+
+    if action == "list":
+        head(f"工作台插件（profile={WB_PROFILE}）")
+        for name, spec_v in deps.items():
+            in_bundle = name in bundles
+            linked = (pkg_path.parent / "node_modules" / name).exists()
+            mark = (ok if (in_bundle and linked) else warn)
+            mark(f"{name:<28} {'bundle ✓' if in_bundle else 'bundle ✗'}  {'linked ✓' if linked else 'node_modules ✗'}  {spec_v}")
+        builtin = [b for b in bundles if b.startswith("@deepseek-ai/")]
+        info("底座：" + ", ".join(builtin))
+        return 0
+
+    if action == "install":
+        env = dict(os.environ, DSH_HOME=str(WB_HOME), DSH_PROFILE=WB_PROFILE)
+        proc = subprocess.run(
+            ["cmd", "/c", str(APP_DSH_CMD), "plugin", "--profile", WB_PROFILE, "install"],
+            env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=600, creationflags=RUNFLAGS,
+        )
+        tail = [ln for ln in (proc.stdout or "").splitlines() if ln.strip()][-4:]
+        for ln in tail:
+            info(ln)
+        (ok if proc.returncode == 0 else bad)(f"install 退出码 {proc.returncode}")
+        return 0 if proc.returncode == 0 else 1
+
+    if action == "add":
+        if not spec:
+            bad("用法：wb.py plugins add <插件目录或包名> [--bundle 名字]")
+            return 2
+        src = Path(spec)
+        name = bundle
+        if src.exists() and (src / "package.json").exists():
+            meta = json.loads((src / "package.json").read_text(encoding="utf-8"))
+            name = name or meta.get("name", src.name)
+            deps[name] = "link:" + src.as_posix()
+        else:
+            name = name or spec
+            deps[name] = spec
+        if name not in bundles:
+            bundles.append(name)
+        pkg_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        ok(f"已写入 profile：{name} → {deps[name]}")
+        return cmd_plugins("install")
+
+    bad(f"未知动作：{action}（list/install/add）")
+    return 2
+
+
 def cmd_compat() -> int:
     """版本/兼容性视角：主驾 vs 工作台 vs 插件声明的 peer 版本。"""
     head("版本")
@@ -368,6 +429,13 @@ def ensure_profile() -> int:
                         "--from-default-profile", "web", "--dump-config"],
                        env=env, capture_output=True, text=True,
                        encoding="utf-8", errors="replace", timeout=180, creationflags=RUNFLAGS)
+        # 首次创建时套用仓库里的种子（插件清单 + 补丁层），重建时可复原
+        seed_dir = WB_ROOT / "seeds" / WB_PROFILE
+        if seed_dir.exists() and pkg.exists():
+            for f in seed_dir.iterdir():
+                if f.is_file():
+                    (pkg.parent / f.name).write_bytes(f.read_bytes())
+            ok(f"已套用种子：{seed_dir}")
     if not pkg.exists():
         bad(f"profile 创建失败：{pkg}")
         return 1
@@ -748,10 +816,15 @@ def cmd_logs(n: int = 40) -> int:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="wb.py", add_help=True)
     ap.add_argument("command", nargs="?", default="status")
+    ap.add_argument("sub", nargs="?", default="")
+    ap.add_argument("rest", nargs="*")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--with-watchdog", action="store_true", default=True)
     ap.add_argument("--no-watchdog", dest="with_watchdog", action="store_false")
     ap.add_argument("--main-pids", default="")
+    ap.add_argument("--bundle", default="")
+    ap.add_argument("--action", default="list")
+    ap.add_argument("--spec", default="")
     ap.add_argument("-n", type=int, default=40)
     args = ap.parse_args(argv[1:])
 
@@ -761,6 +834,7 @@ def main(argv: list[str]) -> int:
         "watch": lambda: cmd_watch(),
         "api": lambda: cmd_api(),
         "compat": lambda: cmd_compat(),
+        "plugins": lambda: cmd_plugins(args.sub or "list", (args.rest[0] if args.rest else ""), args.bundle),
         "rollback": lambda: cmd_rollback(),
         "sync-app": lambda: cmd_sync_app(args.force),
         "start": lambda: cmd_start(args.with_watchdog),

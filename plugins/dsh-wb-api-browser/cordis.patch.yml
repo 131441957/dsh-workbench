@@ -1,0 +1,4 @@
+# workbench bundle patch: inserts the API browser into a profile's layer stack.
+- insert:
+    - id: wb-api-browser
+      name: 'dsh-wb-api-browser'

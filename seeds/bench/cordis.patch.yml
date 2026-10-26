@@ -1,0 +1,8 @@
+# 工作台（bench）补丁层：不接 agent，只当插件宿主
+- id: agent-loop
+  disabled: true
+- id: agent-default-model
+  name: "@deepseek-ai/dsh-agent-default-model"
+  config:
+    provider: deepseek-official
+    model: deepseek-flash
