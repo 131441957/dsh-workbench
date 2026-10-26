@@ -1,0 +1,68 @@
+# 工作台（Workbench）工具盘点 v0.1
+
+> 本文件对应你说的「先确定需要什么工具，有没有缺少工具，可以先构建工具」。
+
+## 一、已定决策（你 2026-10-26 的答复）
+
+| 问题 | 你的答复 | 落地含义 |
+|---|---|---|
+| Q1 安装形态 | 100G 不用省空间，本地 PC | 磁盘不是约束（E 盘剩 96GB），用**独立整套**，不共用 `E:\SSS` |
+| Q2 webui 改造深度 | 主 harness 不用大改，主要显示有没有接入工作台 | 主驾**只加一个接入状态显示**；壳不动 |
+| Q3 旧副驾 | A（废弃重建），**要的不是副本 harness** | 旧 `E:\DSH-PLUGIN` / 59420 淘汰；工作台不是"第二个聊天 harness"，是插件宿主 |
+| Q4 记忆归属 | 记忆最重要，放主驾是为了注入对话；工作台只读 | meow-memory 只在主 profile；工作台只读访问记忆库 |
+
+你另外两条建议：
+1. **先确定需要什么工具、缺什么，可以先构建工具** ← 本文件就是这件事
+2. **构建不要用 PowerShell，用 Python / Java 扩展性更强**
+
+## 二、语言分工（这里有个硬约束，先讲清楚）
+
+| 层 | 能用的语言 | 原因 |
+|---|---|---|
+| 外围工具（启停/备份/监控/脚手架） | **Python 3.10**（已就绪，只用标准库，不装 pip 包） | 你的要求；跨平台、好扩展 |
+| DSH 插件本体 | **只能 JavaScript** | Cordis 加载的是 `package.json` + `cordis.patch.yml` + `client.js/index.js`，运行时就是 Node，Python 无法"挂进 harness" |
+| Java | 当前**未安装** | 如果确定要有 Java 组件，先装 JDK 21，再告诉我放哪一层 |
+
+结论：**工具用 Python，插件用 JS**。这不是偏好吗，是 DSH 的加载器只认 JS。
+
+## 三、工具清单
+
+| # | 工具 | 干什么 | 语言 | 状态 |
+|---|---|---|---|---|
+| 1 | `wb.py doctor` | 运行时/依赖/接口/目录自检 | Python | ✅ 已完成并跑通 |
+| 2 | `wb.py status` | 主驾 + 工作台状态（端口/进程/home/记忆条数） | Python | ✅ 已完成并跑通 |
+| 3 | `wb.py watch` | 采集主 harness 状态快照 → `state/main-status.json` | Python | ✅ 已完成并跑通 |
+| 4 | `wb.py start/stop/restart` | 工作台启停；**无窗口**；**看门狗绑主驾生命周期** | Python | ⬜ 待造 |
+| 5 | `wb.py plugins` | 列插件 / 安装（link）/ 生成 profile patch / 触发 reload | Python 调 bundled pnpm.mjs | ⬜ 待造 |
+| 6 | `wb.py api` | 导出 Service / Event / Slots / Theme 清单，做**接口基线** | Python | ⬜ 待造（优先级 2） |
+| 7 | `wb.py backup` | 独立快照（git 提交 + manifest + 回读校验） | Python + git | ⬜ 待造 |
+| 8 | `wb.py scaffold` | 新建插件模板（package.json / patch / client.js / index.js） | Python | ⬜ 待造 |
+| 9 | 主驾「工作台接入」状态插件 | 主界面显示工作台在线/离线（主驾**唯一**改动） | JS | ⬜ 待造 |
+| 10 | 工作台 UI 外壳 | 注入式改皮/布局（`webServer.tapIndex`），不碰安装目录 | JS | ⬜ 待造 |
+| 11 | 无窗口快捷方式 | 桌面一键启动，不闪 cmd 窗口 | .lnk + pythonw | ⬜ 待造 |
+
+## 四、环境现状（`wb.py doctor` 实测）
+
+```
+python      3.10.11   C:\Users\Administrator\AppData\Local\Programs\Python\Python310\python.exe
+node        24.22.0   E:\nodejs\node.exe
+pnpm.mjs    ok        E:\DSH\home\dsh-runtimes\...\pnpm\bin\pnpm.mjs（不在 PATH，工具里直接用绝对路径）
+git         ok        C:\Program Files\Git\cmd\git.exe
+java        缺失
+主 GUI 端口  每次重启都变（现 56853），wb.py 自动识别
+记忆库      可只读访问：user=7 / project=29 / fact=227 / lesson=34 / topic=39 / rules=3
+```
+
+## 五、下一步顺序（等你点头）
+
+1. **start/stop + 看门狗**：先把工作台实例能起能停，且主 harness 一关它自己退
+2. **接口基线**（`wb.py api`）：把你要求的"先确认接口"落成一份可查的清单
+3. **插件安装/热重载**（`wb.py plugins`）
+4. **主驾接入状态显示**（主驾唯一改动）
+5. **UI 外壳注入**（webui 修改在工作台里做）
+6. **备份 + 私有 GitHub 仓**
+
+## 六、待你确认的一句话
+
+「不是副本 harness」我按这个理解落地：**独立一整套安装 + 独立 home/配置/插件/端口/升级，且不提供聊天功能，只做插件宿主**（不是把主 harness 克隆一份来用）。
+如果你要的是更彻底的东西（比如完全不用 DSH、用 Python 自建宿主），代价是现有 `meow-*` 插件无法复用、需按新规范重写——那样的话告诉我，我改方案。

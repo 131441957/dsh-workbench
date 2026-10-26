@@ -1,0 +1,8 @@
+﻿# 工作台自己的仓库：源码/工具/文档进 git，运行时与备份不进
+app/
+home/
+state/
+backups/
+*.log
+__pycache__/
+*.pyc
