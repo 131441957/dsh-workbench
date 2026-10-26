@@ -37,6 +37,20 @@
   flex: 0 0 auto !important;
 }
 
+/* ⑥ 设置页：只留「语言 / 外观 / 字号大小」，导航列与多余动作整列隐藏
+   （字段级由 workbench.js 按标题文字裁剪；导航会被 React 重渲染，所以用 CSS 压） */
+.ZCYAFq_nav,
+.ZCYAFq_navTitle,
+.ZCYAFq_actions {
+  display: none !important;
+}
+
+/* 导航没了之后让设置面板居中，别贴在左边 */
+.ZCYAFq_panel {
+  left: 50% !important;
+  transform: translateX(-50%) !important;
+}
+
 /* ────────────────────────────────────────────────────────────────
  * 以下为示例样式，可自行增删
  * ──────────────────────────────────────────────────────────────── */

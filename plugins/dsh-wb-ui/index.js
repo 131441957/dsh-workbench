@@ -83,6 +83,16 @@ export function apply(ctx) {
         }
         const text = Buffer.concat(chunks).toString('utf8')
         const out = join(WB_ROOT, 'state', 'dom-snapshot.json')
+        let parsed = null
+        try { parsed = JSON.parse(text) } catch { parsed = null }
+        if (parsed && parsed.kind === 'html' && typeof parsed.html === 'string') {
+          // 整段 HTML 导出（用来按真实类名裁剪设置页）
+          const htmlOut = join(WB_ROOT, 'state', parsed.name || 'dump.html')
+          writeFileSync(htmlOut, parsed.html, 'utf8')
+          res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({ ok: true, bytes: parsed.html.length, path: htmlOut }))
+          return
+        }
         writeFileSync(out, text, 'utf8')
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
         res.end(JSON.stringify({ ok: true, bytes: text.length, path: out }))

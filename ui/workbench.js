@@ -89,6 +89,7 @@
         hide(node.closest('[role="status"], [role="alert"], [class*="toast" i], [class*="alert" i]') || node)
       }
     }
+    pruneSettings()
     if (state.layoutApplied) return
   }
 
@@ -260,7 +261,7 @@
   const snapshot = (tag) => {
     const nodes = []
     const walk = (el, depth) => {
-      if (!el || nodes.length > 1500 || depth > 7) return
+      if (!el || nodes.length > 3000 || depth > 14) return
       const r = el.getBoundingClientRect()
       nodes.push({
         d: depth,
@@ -270,6 +271,7 @@
         x: Math.round(r.x), y: Math.round(r.y),
         w: Math.round(r.width), h: Math.round(r.height),
         text: (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 40),
+        role: el.getAttribute('role') || '',
       })
       for (const child of el.children) walk(child, depth + 1)
     }
@@ -305,6 +307,83 @@
     return true
   }
 
+  // 设置面板一打开就自动拍一张结构快照，方便按真实标签裁剪分区
+  let settingsCaptured = false
+  const watchSettings = () => {
+    if (settingsCaptured) return
+    const dialogs = Array.from(document.querySelectorAll('[role="dialog"], dialog'))
+    const hit = dialogs.find((d) => /设置/.test(d.textContent || ''))
+    if (hit) {
+      settingsCaptured = true
+      setTimeout(() => snapshot('settings'), 400)
+    }
+  }
+  window.__wbCaptureSettings = () => { settingsCaptured = false; watchSettings() }
+
+  // 自动探测设置面板结构：自己点开「设置」→ 拍快照 → 关掉 → 回到默认面板
+  // （不需要用户手动点，刷新一次即可）
+  let probed = false
+  const probeSettings = () => {
+    if (probed) return
+    const openBtn = findButton('设置')
+    if (!openBtn) return
+    probed = true
+    openBtn.click()
+    setTimeout(() => {
+      pruneSettings() // 先裁剪，再导出，导出的结果就是最终可见状态
+      snapshot('settings')
+      const content = document.querySelector('.ZCYAFq_overlay')
+      if (content) {
+        fetch('/wb-ui/dom', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ kind: 'html', name: 'settings.html', html: content.outerHTML }),
+        }).then(() => console.info('[wb-ui] settings html dumped')).catch(() => {})
+      }
+      const closeBtn = document.querySelector('.ZCYAFq_close')
+      if (closeBtn && !(location.search + location.hash).includes('keep-settings')) closeBtn.click()
+      setTimeout(() => {
+        const back = findButton(DEFAULT_PANEL)
+        if (back) { back.click(); markActive(DEFAULT_PANEL) }
+      }, 250)
+    }, 900)
+  }
+  window.__wbProbeSettings = () => { probed = false; probeSettings() }
+
+  // ── 6) 裁剪设置页：只保留 语言 / 外观 / 字号大小 ─────────────────────
+  // 设置项来自不同插件、结构和类名都不一样，唯一稳定的是「标题文字」：
+  // 找到标题文本 → 隐藏它最近的 _row / _group / _setting 容器。
+  const KEEP_SETTINGS = ['语言', '外观', '字号大小']
+  const REMOVE_SETTINGS = ['权限', '工作步骤展示', '显示代码工作视图', '显示代码工作图宽', '快捷键', '繁忙时的发送行为', '性能与用量']
+  const KEEP_NAV = ['通用设置']
+
+  const pruneSettings = () => {
+    const overlay = document.querySelector('.ZCYAFq_overlay')
+    if (!overlay) return
+    let hidden = 0
+    for (const el of overlay.querySelectorAll('div[class*="_title"], div[class*="_settingTitle"]')) {
+      const text = (el.textContent || '').trim()
+      if (!REMOVE_SETTINGS.includes(text)) continue
+      const row = el.closest('div[class*="_row"], div[class*="_group"], div[class*="_setting"]')
+      if (row) { row.classList.add('wb-hidden'); hidden += 1 }
+    }
+    // data-slot 包裹的项（目前只有「权限」这类走 settings.general.item 的）
+    for (const item of overlay.querySelectorAll('[data-slot="settings.general.item"]')) {
+      const title = (item.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 10)
+      const keep = KEEP_SETTINGS.some((k) => title.startsWith(k))
+      if (!keep) item.classList.add('wb-hidden')
+    }
+    for (const cell of overlay.querySelectorAll('.ZCYAFq_navCell')) {
+      const text = (cell.textContent || '').replace(/\s+/g, ' ').trim()
+      cell.classList.toggle('wb-hidden', !KEEP_NAV.includes(text))
+    }
+    for (const actions of overlay.querySelectorAll('.ZCYAFq_actions')) {
+      actions.classList.add('wb-hidden') // “打开配置文件”，工作台用不上
+    }
+    state.settingsHidden = hidden
+  }
+  window.__wbPruneSettings = pruneSettings
+
   const boot = () => {
     attachStyle()
     dismiss()
@@ -316,7 +395,9 @@
     setTimeout(() => snapshot('after'), 3400)
     setTimeout(() => { sweep(); forceLayout(); openDefault() }, 2600)
     setTimeout(() => { sweep(); forceLayout(); openDefault() }, 4000)
-    setInterval(() => { sweep() }, 2500)
+    // 自动探测只在调试时用：默认关闭，需要时控制台执行 __wbProbeSettings()
+    if ((location.search + location.hash).includes('probe-settings')) setTimeout(probeSettings, 5200)
+    setInterval(() => { sweep(); watchSettings() }, 2500)
   }
 
   if (document.readyState === 'loading') {
