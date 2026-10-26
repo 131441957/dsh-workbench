@@ -22,3 +22,9 @@
     selectedDefault: persona
 - id: wb-bridge
   disabled: false
+
+# 预览版说明的已读版本（等价于点过「继续」）：与内置常量 2026-09-28.1 相等就不再弹
+- id: ui-settings-general
+  name: "@deepseek-ai/dsh-client-ui-settings-general"
+  config:
+    welcomeNoticeVersion: "2026-09-28.1"

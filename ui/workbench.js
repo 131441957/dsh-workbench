@@ -12,6 +12,35 @@
     at: new Date().toISOString(),
     label: LABEL,
   }
-  // 控制台留一行痕迹，方便确认脚本真的注入进来了
   console.info('[wb-ui] injected at', window.__WB_UI__.at)
+
+  // ── 自动关掉「预览版说明」弹窗（双保险）────────────────────────────
+  // 首选方案：把 welcomeNoticeVersion 写进 profile 配置（等价于点过「继续」）。
+  // 这里再兜一层：万一版本号变了 / 又弹出来，脚本自动点掉那个「继续」按钮。
+  const DISMISS_TEXTS = ['继续']
+  const MAX_TRIES = 40
+  let tries = 0
+
+  const dismiss = () => {
+    tries += 1
+    if (tries > MAX_TRIES) return
+    const buttons = Array.from(document.querySelectorAll('button'))
+    const target = buttons.find((btn) => {
+      const text = (btn.textContent || '').trim()
+      if (!DISMISS_TEXTS.includes(text)) return false
+      // 只在“确实有对话框”的时候点，避免误点普通按钮
+      return Boolean(btn.closest('[role="dialog"], dialog, [class*="modal" i], [class*="dialog" i]'))
+    })
+    if (target && target.offsetParent !== null) {
+      target.click()
+      console.info('[wb-ui] dismissed preview notice')
+    }
+    if (tries < MAX_TRIES) setTimeout(dismiss, 500)
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', dismiss)
+  } else {
+    dismiss()
+  }
 })();

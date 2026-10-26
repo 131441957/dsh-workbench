@@ -6,3 +6,10 @@
   config:
     provider: deepseek-official
     model: deepseek-flash
+# 直接把「预览版说明」的已读版本写上，等价于点过一次「继续」：
+# 客户端会拿 settings 里的 welcomeNoticeVersion 与内置常量（2026-09-28.1）比对，
+# 相等就不再弹。改这个值可以故意让它重新出现。
+- id: ui-settings-general
+  name: "@deepseek-ai/dsh-client-ui-settings-general"
+  config:
+    welcomeNoticeVersion: "2026-09-28.1"

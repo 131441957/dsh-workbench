@@ -159,3 +159,17 @@ java        缺失
 
 - 每次 `wb.py backup` 会重写 `backups\README.md`：列出所有快照（名字/时间/文件数/备注，备注里的 `|` 已转义）；`wb.py backups` 也会刷新它。
 - `wb.py restore --from <非最新快照>` 会先警告：**还原会把该快照之后的改动一起回滚**（这是真实风险，不是吓人）。用户可以选择保留旧快照作对照，但要知道这一点。
+
+## 去掉「预览版说明」弹窗（2026-10-26）
+
+- 机制（从其自身文档挖出）：客户端把内置常量 `WELCOME_NOTICE_VERSION = "2026-09-28.1"` 与 settings 里的 `ui-settings-general.welcomeNoticeVersion` 做**严格相等**比较，相等才不弹；只有点「继续」才写入。
+- 做法：在 profile 补丁层直接写这个值（等价于点过一次「继续」）：
+  ```yaml
+  - id: ui-settings-general
+    name: "@deepseek-ai/dsh-client-ui-settings-general"
+    config:
+      welcomeNoticeVersion: "2026-09-28.1"
+  ```
+- 已写入两处：工作台 `home\profiles\bench\cordis.patch.yml`（立即生效，刷新即可）与主驾 `E:\DSH\home\profiles\desktop\cordis.patch.yml`（**需重启主程序**才生效；改前备份 `E:\newwork\backup\pre-ui-notice-*`）。两处都用 `--dump-config` 验证过组装结果含该值、零报错。
+- 双保险：`ui\workbench.js` 里加了自动点「继续」的兜底（MutationObserver 未用，改为定时尝试点击对话框里的「继续」按钮，最多 40 次 × 0.5s），版本号将来变了也能自动关掉。
+- 想让它重新出现：把版本值改成别的字符串即可。
