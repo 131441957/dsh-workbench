@@ -35,6 +35,47 @@ function dshHome() {
   return process.env.DSH_HOME || 'E:\\DSH\\home'
 }
 
+// ── 主驾工作区注册表（只读，30 秒缓存）：路径 → 显示名 ────────────────
+// 显示规则对齐原版 UI（从 app.asar 里查到的规则）：标题是 default-workspace 的工作区
+// 按读者语言显示「默认工作区」，其余标题原样显示；没有标题时退回目录末段。
+let wsCache = { at: 0, data: null }
+
+function normalizeWsPath(value) {
+  return String(value || '').replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase()
+}
+
+function readWorkspaces() {
+  if (wsCache.data && Date.now() - wsCache.at < 30000) return wsCache.data
+  let data = { defaultWorkspaceId: '', workspaces: [] }
+  try {
+    const reg = JSON.parse(readFileSync(join(dshHome(), 'storages', 'workspace.json'), 'utf8'))
+    const def = String((reg && reg.global && reg.global.defaultWorkspaceId) || '')
+    const table = (reg && reg.tables && reg.tables.workspaces) || {}
+    const workspaces = []
+    for (const [id, ws] of Object.entries(table)) {
+      const path = String((ws && ws.path) || '')
+      const title = String((ws && ws.title) || '').trim()
+      const tail = path.split(/[\\/]/).filter(Boolean).slice(-1)[0] || ''
+      let label = title || tail
+      if (label === 'default-workspace') label = '默认工作区'
+      workspaces.push({
+        id,
+        path,
+        key: normalizeWsPath(path),
+        title,
+        label: label || '未命名工作区',
+        isDefault: id === def,
+        sessionIds: Array.isArray(ws && ws.sessionIds) ? ws.sessionIds : [],
+      })
+    }
+    data = { defaultWorkspaceId: def, workspaces }
+  } catch {
+    /* 注册表读不到就退回目录末段，不报错也不影响会话列表 */
+  }
+  wsCache = { at: Date.now(), data }
+  return data
+}
+
 function findSessionLog(sessionId) {
   const root = join(dshHome(), 'sessions')
   const short = String(sessionId).replace(/^session-/, '')
@@ -169,6 +210,13 @@ export function apply(ctx) {
     if (url.pathname === `${PREFIX}/health`) {
       const main = await resolveMain()
       sendJson(res, 200, { ok: true, mainPort: main.port, hasToken: Boolean(main.token) })
+      return
+    }
+
+    // 工作区注册表：面板「按工作区」分组拿显示名用（纯读主驾文件，不经过桥）
+    if (url.pathname === `${PREFIX}/workspaces`) {
+      const ws = readWorkspaces()
+      sendJson(res, 200, { ok: true, ...ws })
       return
     }
 

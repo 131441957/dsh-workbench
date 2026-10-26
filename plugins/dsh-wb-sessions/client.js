@@ -229,7 +229,14 @@ window.__ModuleLoader__.load({
       return '#' + s.sessionId.replace('session-', '').slice(0, 8)
     }
 
-    // 分组：按工作区（cwd 末段）分组；组内按排序模式排序
+    // 分组：按**工作区（cwd）**分组，组头用工作区显示名，不是会话标题。
+    // 曾经这里用了 sessionLabel（优先标题），结果每条会话自成一组建头全是标题——已修。
+    function wsKey(path) {
+      return String(path || '').replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase()
+    }
+    function wsTail(path) {
+      return String(path || '').split(/[\\/]/).filter(Boolean).slice(-1)[0] || ''
+    }
     // 行标题：有标题就显示标题；没有标题时，工作区模式下用短号避免与组头重复
     function rowTitle(s, group) {
       const title = sessionTitle(s)
@@ -238,11 +245,12 @@ window.__ModuleLoader__.load({
       if (group && group.key && String(group.key).startsWith('ws:')) return short
       return sessionLabel(s)
     }
-    function buildGroups(items, mode, needle) {
+    function buildGroups(items, mode, needle, wsByPath) {
       const q = needle ? needle.toLowerCase() : ''
       const list = items.filter((s) => !q
         || (s.cwd || '').toLowerCase().includes(q)
-        || s.sessionId.toLowerCase().includes(q))
+        || s.sessionId.toLowerCase().includes(q)
+        || String(sessionTitle(s)).toLowerCase().includes(q))
       const sorted = list.slice().sort((a, b) => {
         if (mode === 'running' && Boolean(a.running) !== Boolean(b.running)) return a.running ? -1 : 1
         return (b.updatedAt || 0) - (a.updatedAt || 0)
@@ -250,13 +258,19 @@ window.__ModuleLoader__.load({
       if (mode === 'workspace') {
         const map = new Map()
         for (const s of sorted) {
-          const key = sessionLabel(s)
-          if (!map.has(key)) map.set(key, [])
-          map.get(key).push(s)
+          const key = wsKey(s.cwd)
+          const meta = key && wsByPath ? wsByPath.get(key) : null
+          const label = (meta && meta.label) || wsTail(s.cwd) || '未归属工作区'
+          if (!map.has(key)) map.set(key, { label, items: [] })
+          map.get(key).items.push(s)
         }
         return Array.from(map.entries())
-          .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
-          .map(([label, groupItems]) => ({ key: 'ws:' + label, label, items: groupItems }))
+          .map(([key, g]) => ({ key: 'ws:' + key, label: g.label, items: g.items }))
+          .sort((a, b) => {
+            const at = Math.max(...a.items.map((s) => s.updatedAt || 0))
+            const bt = Math.max(...b.items.map((s) => s.updatedAt || 0))
+            return bt - at || a.label.localeCompare(b.label)
+          })
       }
       return [{ key: 'all', label: '全部会话', items: sorted }]
     }
@@ -308,15 +322,27 @@ window.__ModuleLoader__.load({
       const [hasToken, setHasToken] = useState(true)
       const [live, setLive] = useState(null)
       const [query, setQuery] = useState('')
-      const [sortMode, setSortMode] = useState('recent')
+      const [sortMode, setSortMode] = useState('workspace')
+      const [wsIndex, setWsIndex] = useState(new Map())
       const [collapsedGroups, setCollapsedGroups] = useState(new Set())
       const listTimer = useRef(0)
       const bottomRef = useRef(null)
 
       const loadList = async () => {
         try {
-          const body = await jsonFetch('/wb-sessions/list')
+          const [body, wss] = await Promise.all([
+            jsonFetch('/wb-sessions/list'),
+            jsonFetch('/wb-sessions/workspaces').catch(() => null),
+          ])
           setSessions(body.items || [])
+          if (wss && Array.isArray(wss.workspaces)) {
+            const next = new Map()
+            for (const w of wss.workspaces) {
+              const key = w.key || wsKey(w.path)
+              if (key) next.set(key, w)
+            }
+            setWsIndex(next)
+          }
           setError('')
         } catch (e) { setError(String(e.message || e)) }
       }
@@ -399,7 +425,7 @@ window.__ModuleLoader__.load({
           return next
         })
       }
-      const groups = useMemo(() => buildGroups(sessions, sortMode, query), [sessions, sortMode, query])
+      const groups = useMemo(() => buildGroups(sessions, sortMode, query, wsIndex), [sessions, sortMode, query, wsIndex])
 
       const current = sessions.find((s) => s.sessionId === selected)
 
@@ -500,7 +526,7 @@ window.__ModuleLoader__.load({
 
     return {
       inject: ['slots'],
-      __test__: { renderMarkdown },
+      __test__: { renderMarkdown, buildGroups, wsKey, sessionLabel },
       apply(ctx) {
         ctx.slots.inject('sidebar.panellist', () =>
           ctx.slots.register({ name: 'sidebar.panellist', id: 'wb-sessions', order: 45, label: () => 'Harness会话' }, Icon))

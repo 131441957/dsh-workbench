@@ -23,20 +23,25 @@
 - **SSE 实时流**：桥 `/wb-bridge/events` 每 3 秒推 `{workbench:{reachable,latencyMs},sessions:{count,running,latest}}`；工作台代理 `/wb-sessions/events` 转发；面板用 EventSource 自动刷新。
 - **工作台插件**：`dsh-wb-api-browser`（状态面板 key `wb-api`：宿主服务/前端槽位/profile 分层/主驾状态 **+ 独立「工作台插件」面板 key `wb-plugins`**，用 `h(Panel,{fixedTab:'plugins',hideTabs:true})` 复用同一份 Panel）、`dsh-wb-sessions`（Harness 会话：列表/历史/发送 + 标题）、`dsh-wb-ui`（webui 注入层）、`dsh-wb-web`（能力出口，重复能力，已标注）、`dsh-workbench-bridge`（主驾侧）。
 - **UI 现状**：左栏已改**顶栏**（纯 CSS：`.OSewFq_frame` 强制 flex、隐藏 sidebar/rightbar/handle、centerCol 撑满；`body{padding-top:46px}`）。顶栏分组：左「Harness会话 / 插件」，右「状态 / 设置」。面板根节点带 `data-wb-panel`，`ui\workbench.js` 的 `maskUnknownMain()` 在面板就位前遮罩主区，避免「探索未至之境」闪一下（6 秒超时保护）。
-- **会话面板**：290px 左栏；首部三行（标题/实时状态/过滤+排序）；按工作区分组、可折叠、组头加粗+胶囊计数+分隔线；行缩进 20px、运行中圆点发光；**标题来自桥透出的 `summary.projections.values.title`**（`/wb-sessions/list` 已带 `title`）。
+- **会话面板**：290px 左栏；首部三行（标题/实时状态/过滤+排序）；**按工作区分组**（默认排序=按工作区）：分组键是 `cwd`，组头显示工作区名——名字来自宿主新增接口 `/wb-sessions/workspaces`（只读主驾 `storages\workspace.json`，`default-workspace` 按原版规则显示成「默认工作区」），取不到才退回目录末段；可折叠、组头加粗+胶囊计数+分隔线；行缩进 20px、运行中圆点发光；**行标题来自桥透出的 `summary.projections.values.title`**（`/wb-sessions/list` 已带 `title`）。⚠️ 曾经分组键误用 `sessionLabel()`（优先标题），导致每条会话自成一组、组头全是标题——已修，回归测试 `tools\test-sessions-group.mjs`。
 - **设置页**：只留 语言 / 外观 / 字号大小；其余按标题文字隐藏（`pruneSettings()`，正则 `[\w-]+_(row|group|setting)`，别按 `[data-slot]` 判断——它包住整个区域）。
 - **备份**：`wb.py backup --note "…"` → `backups\snapshot-<时间>.zip`（含 tools/plugins/seeds/docs/ui + config.json + home/profiles/bench + home/storages/*.json；**不收** credentials/app/state/logs）。现有 5 份快照全保留 + 运行时备份 `app-0.2.1-alpha.1-*`（1.69 GB，`rollback` 秒回）。
 
 ## 常用验证手段（别靠猜）
 > git：本仓库**没有配全局身份**，直接 `git commit` 会报 `Author identity unknown`；用 `git -c user.name=meow -c user.email=meow@local commit -m "…"`，提交后 `git status --short` 必须为空。
+> 重启会换 token：`wb.py restart` 之后，已经开着的页面 cookie 失效（主区全白）。**必须**把页面导航到 `wb.py url` 打出的新地址（`Ctrl+L` 输入后可能要按两次 Enter，第一次会被地址栏下拉建议吃掉）。
 
 ```powershell
 python E:\DSH-WORKBENCH\tools\wb.py status       # 端口/守护/版本
 python E:\DSH-WORKBENCH\tools\wb.py info         # 单行 JSON（GUI 也用它）
 python E:\DSH-WORKBENCH\tools\wb.py caps         # 工作台独有能力清单
+python E:\DSH-WORKBENCH\tools\wb.py url          # 带 token 的当前地址（重启后必用）
 curl  http://127.0.0.1:59430/wb-ui               # 注入层状态
 curl  http://127.0.0.1:59430/wb-sessions/health  # 主驾端口/token
+curl  http://127.0.0.1:59430/wb-sessions/workspaces  # 工作区注册表（分组显示名）
 # 页面自报结构：POST /wb-ui/dom → state\dom-snapshot.json；控制台 __WB_UI__ / __wbSweep()
+# 开机自诊断：每次加载页面 4.6 秒后自动写 state\boot-diag.json（按钮表 / hasPanel / clickLog / JS 报错 / console.error）
+node E:\DSH-WORKBENCH\tools\test-sessions-group.mjs   # 分组回归（工作区 vs 标题）
 ```
 
 ## 待办

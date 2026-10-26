@@ -13,6 +13,59 @@
   window.__wbSweep = () => sweep()
   console.info('[wb-ui] injected')
 
+  // ── 开机自诊断：抓 JS 报错 + 按钮表 + 面板是否就位（只写 state\boot-diag.json）──
+  // 目的：面板挂不上时不用猜——直接看是脚本报错、还是入口按钮压根没注册。
+  if (!Array.isArray(state.errors)) state.errors = []
+  window.addEventListener('error', (e) => {
+    const f = String((e && e.filename) || '').split('/').pop()
+    state.errors.push(String((e && e.message) || e) + (f ? ' @' + f + ':' + String(e.lineno || '') : ''))
+  }, true)
+  window.addEventListener('unhandledrejection', (e) => {
+    const reason = e && e.reason ? (e.reason.message || String(e.reason)) : '?'
+    state.errors.push('rejection: ' + String(reason))
+  })
+  // React 的渲染错误只走 console.error，不会触发 window.onerror——必须拦一层
+  if (!state.consoleErrors) state.consoleErrors = []
+  const rawConsoleError = console.error.bind(console)
+  console.error = (...args) => {
+    try {
+      state.consoleErrors.push(args.map((a) => {
+        if (a instanceof Error) return a.message
+        if (typeof a === 'object' && a !== null) { try { return JSON.stringify(a).slice(0, 200) } catch { return '[object]' } }
+        return String(a)
+      }).join(' ').slice(0, 400))
+    } catch { /* ignore */ }
+    try { rawConsoleError(...args) } catch { /* ignore */ }
+  }
+  if (!state.clickLog) state.clickLog = []
+  const bootDiag = () => {
+    try {
+      const buttons = Array.from(document.querySelectorAll('button, a, [role="button"]'))
+        .map((el) => (el.textContent || '').replace(/\s+/g, ' ').trim())
+        .filter(Boolean).slice(0, 60)
+      const payload = {
+        at: new Date().toISOString(),
+        url: location.href.slice(0, 120),
+        hasPanel: Boolean(document.querySelector('[data-wb-panel]')),
+        hasSessionsEntry: buttons.includes('Harness会话'),
+        hasPluginsEntry: buttons.includes('插件'),
+        topbar: Boolean(document.getElementById('wb-topbar')),
+        masked: Boolean(state.mainMasked),
+        defaulted: Boolean(document.getElementById('wb-topbar')) && state.activeMarked ? true : false,
+        buttons,
+        errors: state.errors.slice(0, 12),
+        consoleErrors: (state.consoleErrors || []).slice(0, 12),
+        clickLog: (state.clickLog || []).slice(0, 8),
+      }
+      fetch('/wb-ui/dom', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'html', name: 'boot-diag.json', html: JSON.stringify(payload, null, 1) }),
+      }).catch(() => {})
+    } catch { /* 诊断本身不许影响页面 */ }
+  }
+  window.__wbBootDiag = bootDiag
+
   // ── 0) 基础样式 ─────────────────────────────────────────────────────
   const style = document.createElement('style')
   style.id = 'wb-ui-hide-style'
@@ -239,12 +292,27 @@
   let defaulted = false
   const openDefault = () => {
     if (defaulted) return
-    if (!/选择工作区|探索未至之境/.test(document.body ? document.body.innerText : '')) return
+    // 注意：必须用 textContent 而不是 innerText —— 遮罩用 visibility:hidden 藏主区，
+    // 被藏元素没有 innerText，用 innerText 判断会永远为假（曾因此点击永不触发、面板挂不上）。
+    if (!/选择工作区|探索未至之境/.test(document.body ? document.body.textContent : '')) return
     const btn = findButton(DEFAULT_PANEL)
-    if (!btn) return
+    if (!btn) {
+      state.clickLog.push({ t: Date.now(), found: false })
+      return
+    }
     defaulted = true
+    state.clickLog.push({ t: Date.now(), found: true, tag: btn.tagName, cls: String(btn.className || '').slice(0, 60), text: textOf(btn) })
     btn.click()
     markActive(DEFAULT_PANEL)
+    setTimeout(() => {
+      const center = document.querySelector('.OSewFq_centerCol')
+      state.clickLog.push({
+        t: Date.now(),
+        after: true,
+        hasPanel: Boolean(document.querySelector('[data-wb-panel]')),
+        centerHead: center ? (center.innerText || '').replace(/\s+/g, ' ').slice(0, 60) : 'no-center',
+      })
+    }, 900)
   }
 
   // ── 5) 启动 ────────────────────────────────────────────────────────
@@ -462,6 +530,7 @@
     setTimeout(() => { sweep(); forceLayout(); openDefault() }, 900)
     setTimeout(() => { sweep(); forceLayout(); openDefault() }, 1800)
     setTimeout(() => { sweep(); forceLayout(); openDefault() }, 3000)
+    setTimeout(bootDiag, 4600)
     // 自动探测只在调试时用：默认关闭，需要时控制台执行 __wbProbeSettings()
     if ((location.search + location.hash).includes('probe-settings')) setTimeout(probeSettings, 5200)
     setInterval(() => { sweep(); watchSettings() }, 2500)
