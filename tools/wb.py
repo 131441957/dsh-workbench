@@ -235,10 +235,25 @@ def dir_size(path: Path) -> tuple[int, int]:
 def read_pids() -> dict:
     if not PIDS_FILE.exists():
         return {}
+    for enc in ("utf-8-sig", "utf-8", "utf-16"):
+        try:
+            return json.loads(PIDS_FILE.read_text(encoding=enc))
+        except Exception:
+            continue
+    return {}
+
+
+def find_supervisors() -> list[int]:
+    """按命令行扫 pythonw 里的 `wb.py supervise`（防止记录丢失/重复）。"""
+    ps = ("Get-CimInstance Win32_Process -Filter \"Name = 'pythonw.exe' or Name = 'python.exe'\" | "
+          "Where-Object { $_.CommandLine -like '*wb.py*supervise*' } | "
+          "Select-Object -ExpandProperty ProcessId")
     try:
-        return json.loads(PIDS_FILE.read_text(encoding="utf-8"))
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True,
+                             timeout=40, creationflags=RUNFLAGS, encoding="utf-8", errors="replace").stdout
+        return [int(x) for x in out.split() if x.strip().isdigit()]
     except Exception:
-        return {}
+        return []
 
 
 def write_pids(data: dict) -> None:
@@ -350,6 +365,140 @@ def cmd_open() -> int:
         return 1
     ok(f"已在浏览器打开 → {url}")
     return 0
+
+
+SUPERVISOR_FILE = STATE_DIR / "supervisor.json"
+
+
+def cmd_supervise(interval: float = 8.0) -> int:
+    """自动伴随：主程序在 → 确保工作台在跑；主程序关 → 收掉工作台。常驻、无窗口。"""
+    log = LOG_DIR / "supervisor.log"
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 用 supervisor.json 判重（pids.json 会被 stop 改动，不能当唯一依据）
+    for candidate in (SUPERVISOR_FILE, PIDS_FILE):
+        if not candidate.exists():
+            continue
+        try:
+            data = json.loads(candidate.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        pid = int(data.get("pid") or data.get("supervisor") or 0) if candidate is SUPERVISOR_FILE else int(data.get("supervisor") or 0)
+        if pid and pid != os.getpid() and pid_alive(pid):
+            print(f"supervisor 已在运行 pid={pid}")
+            return 0
+    SUPERVISOR_FILE.write_text(
+        json.dumps({"pid": os.getpid(), "startedAt": time.strftime("%Y-%m-%dT%H:%M:%S")}, indent=2),
+        encoding="utf-8",
+    )
+    pids = read_pids()
+    pids["supervisor"] = os.getpid()
+    write_pids(pids)
+
+    def note(msg: str) -> None:
+        with open(log, "a", encoding="utf-8") as fh:
+            fh.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
+
+    note(f"supervisor start pid={os.getpid()} interval={interval}s")
+    was_up = None
+    while True:
+        try:
+            main_ports = main_harness_ports()
+            main_up = bool(main_ports)
+            wb_up = port_open(WB_PORT)
+            if main_up != was_up:
+                note(f"main harness {'up' if main_up else 'down'} ports={main_ports}")
+                was_up = main_up
+            if main_up and not wb_up:
+                note("workbench missing → starting")
+                cmd_start(True)
+            elif (not main_up) and wb_up:
+                note("main harness gone → stopping workbench")
+                cmd_stop()
+        except Exception as exc:  # noqa: BLE001
+            note(f"loop error: {exc}")
+        time.sleep(interval)
+
+
+def cmd_page() -> int:
+    """只打开页面：不启动任何东西（工作台没跑就直说）。"""
+    if not port_open(WB_PORT):
+        warn(f"工作台没在跑（{WB_PORT} 无响应）。先双击「DSH 工作台」，或等自动伴随把它拉起来。")
+        return 1
+    url = current_url()
+    if not url:
+        bad("拿不到入口 URL")
+        return 1
+    try:
+        os.startfile(url)  # noqa: S606
+    except Exception as exc:  # noqa: BLE001
+        warn(f"打开失败（{exc}），手动复制：")
+        print(url)
+        return 1
+    ok(f"已打开 → {url}")
+    return 0
+
+
+def cmd_supervisor_status() -> int:
+    head("自动伴随（supervisor）")
+    sup = read_pids().get("supervisor") or 0
+    if sup and pid_alive(int(sup)):
+        ok(f"运行中 pid={sup}")
+    else:
+        warn("未运行（wb.py supervise，或开机自启快捷方式）")
+    log = LOG_DIR / "supervisor.log"
+    if log.exists():
+        for line in log.read_text(encoding="utf-8", errors="replace").splitlines()[-5:]:
+            info(line)
+    return 0
+
+
+def cmd_suspend() -> int:
+    """暂停：先停自动伴随，再停工作台（否则 8 秒后会被拉回来）。"""
+    head("暂停自动伴随 + 工作台")
+    victims = set()
+    sup = int(read_pids().get("supervisor") or 0)
+    if sup:
+        victims.add(sup)
+    if SUPERVISOR_FILE.exists():
+        try:
+            victims.add(int(json.loads(SUPERVISOR_FILE.read_text(encoding="utf-8-sig")).get("pid") or 0))
+        except Exception:
+            pass
+    victims.update(find_supervisors())
+    victims = {p for p in victims if p and pid_alive(p)}
+    if not victims:
+        warn("没找到运行中的 supervisor")
+    for pid in victims:
+        kill_tree(pid)
+        ok(f"已结束 supervisor（pid={pid}）")
+    pids = read_pids()
+    pids["supervisor"] = 0
+    write_pids(pids)
+    cmd_stop()
+    info("要恢复：wb.py resume（或重新登录，开机自启会拉起）")
+    return 0
+
+
+def cmd_resume() -> int:
+    """恢复：用 WMI 重新起自动伴随。"""
+    head("恢复自动伴随")
+    pids = read_pids()
+    sup = int(pids.get("supervisor") or 0)
+    if sup and pid_alive(sup):
+        warn(f"supervisor 已在运行 pid={sup}")
+        return 0
+    pythonw = Path(sys.executable).with_name("pythonw.exe")
+    exe = pythonw if pythonw.exists() else Path(sys.executable)
+    pid = wmi_spawn(f'"{exe}" "{Path(__file__).resolve()}" supervise')
+    if pid:
+        pids["supervisor"] = pid
+        write_pids(pids)
+        ok(f"supervisor 已启动 pid={pid}（主程序在的话 8 秒内会拉起工作台）")
+        return 0
+    bad("启动失败")
+    return 1
 
 
 def cmd_compat() -> int:
@@ -615,7 +764,11 @@ def cmd_stop() -> int:
         kill_tree(pid)
         ok(f"已结束占用 {WB_PORT} 的进程（pid={pid}）")
         stopped = True
-    write_pids({})
+    # 只清 serve/watchdog，别把 supervisor 的记录一起抹掉
+    pids = read_pids()
+    pids["serve"] = 0
+    pids["watchdog"] = 0
+    write_pids(pids)
     if not stopped:
         warn("没有在跑的工作台")
     return 0
@@ -922,6 +1075,11 @@ def main(argv: list[str]) -> int:
         "plugins": lambda: cmd_plugins(args.sub or "list", (args.rest[0] if args.rest else ""), args.bundle),
         "url": lambda: cmd_url(),
         "open": lambda: cmd_open(),
+        "page": lambda: cmd_page(),
+        "supervise": lambda: cmd_supervise(),
+        "supervisor": lambda: cmd_supervisor_status(),
+        "suspend": lambda: cmd_suspend(),
+        "resume": lambda: cmd_resume(),
         "rollback": lambda: cmd_rollback(),
         "sync-app": lambda: cmd_sync_app(args.force),
         "start": lambda: cmd_start(args.with_watchdog),

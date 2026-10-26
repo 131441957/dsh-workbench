@@ -79,3 +79,12 @@ java        缺失
   59430 已释放
   ```
 - 行为约定：主程序（含托盘“完全退出”）关闭 → 8 秒内工作台关闭；主程序重新打开后**不会**自动拉起工作台（双击桌面「DSH 工作台」即可）。
+
+## 自动伴随（supervisor）与快捷方式（2026-10-26）
+
+- **桌面「DSH 工作台」** = `pythonw wb.py page` → **只打开页面**，不启动任何服务。
+- **开机自启「DSH 工作台（自动伴随）」**（启动文件夹）= `pythonw wb.py supervise`：
+  - 每 8 秒检查：主程序在 + 59430 没起 → 自动拉起；主程序没了 → 收掉工作台
+  - 实测：`workbench missing → starting`；手动 stop 后 8 秒内自动恢复
+- **临时要停**：`wb.py suspend`（先停守护再停服务，否则会被拉回来）；恢复：`wb.py resume`
+- 坑：`wb.py stop` 曾把 pids.json 整个清空，导致 supervisor 记录丢失；现在只清 serve/watchdog，且 `read_pids()` 兼容 BOM（PowerShell 写 UTF8 会带 BOM，`json.loads` 会直接失败）。
