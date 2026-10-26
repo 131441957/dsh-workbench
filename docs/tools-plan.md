@@ -195,3 +195,11 @@ java        缺失
 - 正确做法：①注入 `<style>.wb-hidden{display:none!important}</style>` ②每次 sweep 都**重新加类**（不要跳过已处理的元素）③MutationObserver 监听 `childList + attributes(style/class)`，节流 200ms ④每 2 秒兜底巡检一次。
 - 工作台没有 agent 时，应用自己会尝试新建会话并弹 `新建会话失败 / no agent factory` toast——把这类浮层也一并隐藏（SILENCE_TEXTS）。
 - 调试入口：控制台执行 `__wbSweep()` 手动重扫，`__WB_UI__.hidden` 看隐藏了什么。
+
+## 左栏改顶栏（纯 CSS，2026-10-26 收官）
+
+- 真实结构（DOM 快照实测）：`.OSewFq_frame` = `[sidebarCol | centerCol | rightbarCol]`，**frame 是 grid**（中列被固定成 280px），右侧空列占 948px。
+- 关键认知：这些 `OSewFq_* / WAD9hW_*` 是可读的 CSS Modules 类名，但样式**不在应用的 css 资源里**（两个 css 都扒过，没有），由客户端插件运行时注入 → 必须 `!important` 压，并配内联兜底。
+- 生效写法：`.OSewFq_frame{display:flex!important;flex-direction:row!important}` + `.OSewFq_centerCol{flex:1 1 auto!important;width:auto!important;max-width:none!important}` + 隐藏 `sidebarCol / rightbarCol / handle`；顶栏留白用 `body{padding-top:46px}`。
+- 结果：centerCol 280 → **1228（满宽）**，面板标题行 y=46、内容 y=90..840，无遮挡无空白。
+- 验证手段：`POST /wb-ui/dom` 把真实 DOM（类名/坐标/尺寸）落到 `state\dom-snapshot.json`，改造前后各拍一张对照——比截图靠谱。
