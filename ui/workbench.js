@@ -19,23 +19,13 @@
   style.textContent = `
     .wb-hidden { display: none !important; }
     #wb-topbar {
-      position: static; flex: 0 0 auto; height: 46px; box-sizing: border-box;
+      position: fixed; top: 0; left: 0; right: 0; height: 46px; box-sizing: border-box;
       display: flex; align-items: center; gap: 6px; padding: 0 12px;
       background: var(--dsw-alias-bg-base, #16181d);
       border-bottom: 1px solid var(--dsw-alias-border-secondary, #2a2e37);
       z-index: 2147482000;
       font: 12px/1 "Segoe UI", system-ui, sans-serif;
     }
-    /* 顶栏 + 应用本体 的纵向容器：顶栏一行，应用占满剩余高度 */
-    #wb-shell {
-      display: flex; flex-direction: column;
-      width: 100%; height: 100%; min-height: 0; box-sizing: border-box;
-    }
-    #wb-shell > #wb-app-host {
-      flex: 1 1 auto; min-height: 0; min-width: 0;
-      display: flex; flex-direction: column; overflow: hidden;
-    }
-    #wb-shell > #wb-app-host > * { flex: 1 1 auto; min-height: 0; min-width: 0; max-height: 100%; }
     #wb-topbar .wb-brand {
       font-weight: 600; letter-spacing: .3px; margin-right: 10px;
       color: var(--dsw-alias-label-primary, #e6e6e6); white-space: nowrap;
@@ -185,32 +175,15 @@
     return bar
   }
 
-  // 让主内容区给顶栏留出高度：把整个应用装进纵向 flex 容器里，不做 fixed 覆盖
-  const mountShell = () => {
+  // 让主内容区给顶栏留出高度：给 body 加顶栏高度的 padding（不动应用内部结构，
+  // 上次把 #root 搬进包装容器导致高度链断裂、整页空白，已弃用）
+  const reserveTopSpace = () => {
     const bar = document.getElementById('wb-topbar')
-    const root = document.body.firstElementChild
-    if (!bar || !root) return false
-    if (root.parentElement && root.parentElement.id === 'wb-shell') return true
-    if (root === bar) return false
-
-    const shell = document.createElement('div')
-    shell.id = 'wb-shell'
-    const host = document.createElement('div')
-    host.id = 'wb-app-host'
-
-    root.parentElement.insertBefore(shell, root)
-    shell.appendChild(bar)
-    shell.appendChild(host)
-    host.appendChild(root)
-
-    for (const el of [document.documentElement, document.body]) {
-      el.style.setProperty('height', '100%', 'important')
-      el.style.setProperty('margin', '0', 'important')
-      el.style.setProperty('padding', '0', 'important')
-      el.style.setProperty('overflow', 'hidden', 'important')
-    }
-    state.shell = true
-    return true
+    if (!bar) return
+    const h = bar.getBoundingClientRect().height || 46
+    document.body.style.setProperty('padding-top', `${h}px`, 'important')
+    document.body.style.setProperty('box-sizing', 'border-box', 'important')
+    state.reserved = h
   }
 
   const placeTopbar = () => {
@@ -222,7 +195,7 @@
       state.sidebarHides = chain.length
     }
     buildTopbar()
-    mountShell()
+    reserveTopSpace()
     if (!state.activeMarked && findButton('接口浏览器')) {
       state.activeMarked = true
       markActive('接口浏览器')
