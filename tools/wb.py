@@ -24,6 +24,7 @@ import argparse
 import ctypes
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -75,6 +76,14 @@ def head(t): print(f"\n── {t} " + "─" * max(0, 58 - len(t)))
 
 
 # ── 进程 / 端口 ─────────────────────────────────────────────────────────
+def app_version() -> str:
+    rt = APP_ROOT / r"resources\runtime\primary-runtime\runtime.json"
+    try:
+        return json.loads(rt.read_text(encoding="utf-8")).get("desktopVersion", "unknown")
+    except Exception:
+        return "unknown"
+
+
 def _k32():
     return ctypes.windll.kernel32
 
@@ -482,6 +491,136 @@ def cmd_watch() -> int:
     return 0
 
 
+def cmd_api() -> int:
+    """接口基线：①把工作台 profile 的组装结果 dump 出来 ②合上 state/api-live.json（活体快照）。"""
+    head("接口基线")
+    if not APP_DSH_CMD.exists():
+        bad(f"找不到工作台安装：{APP_DSH_CMD}")
+        return 1
+    env = dict(os.environ, DSH_HOME=str(WB_HOME), DSH_PROFILE=WB_PROFILE)
+    proc = subprocess.run(
+        ["cmd", "/c", str(APP_DSH_CMD), "--profile", WB_PROFILE, "--dump-config"],
+        env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=300, creationflags=RUNFLAGS,
+    )
+    if proc.returncode != 0:
+        bad(f"dump-config 失败（退出码 {proc.returncode}）")
+        for line in (proc.stderr or "").splitlines()[:10]:
+            info(line)
+        return 1
+
+    layer = "?"
+    rows: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for line in proc.stdout.splitlines():
+        s = line.strip()
+        m = re.match(r"^#\s*==\s*(.+?)(?:,\s*patched by .*)?$", s)
+        if m:
+            layer = m.group(1).strip()
+            if layer not in rows:
+                rows[layer] = []
+                order.append(layer)
+            continue
+        m = re.match(r"^-\s*id:\s*(\S+)", s)
+        if m:
+            if layer not in rows:
+                rows[layer] = []
+                order.append(layer)
+            rows[layer].append({"id": m.group(1), "name": "", "disabled": False})
+            continue
+        m = re.match(r"^name:\s*'?([^']+)'?$", s)
+        if m and rows.get(layer):
+            rows[layer][-1]["name"] = m.group(1).strip()
+            continue
+        if s.startswith("disabled:"):
+            if rows.get(layer):
+                rows[layer][-1]["disabled"] = "true" in s.lower()
+
+    build = {
+        "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "workbenchProfile": WB_PROFILE,
+        "layers": [{"layer": l, "rows": rows[l]} for l in order],
+        "totals": {
+            "layers": len(order),
+            "rows": sum(len(v) for v in rows.values()),
+            "disabled": sum(1 for v in rows.values() for r in v if r["disabled"]),
+        },
+    }
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    build_path = STATE_DIR / "api-build.json"
+    build_path.write_text(json.dumps(build, ensure_ascii=False, indent=2), encoding="utf-8")
+    ok(f"组装结果 → {build_path}（{build['totals']['rows']} 行 / {build['totals']['layers']} 层）")
+
+    live_path = STATE_DIR / "api-live.json"
+    live = {}
+    if live_path.exists():
+        try:
+            live = json.loads(live_path.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            warn(f"api-live.json 解析失败：{exc}")
+    else:
+        warn("还没有活体快照（state/api-live.json），先跑 tools/collect-live-api.py")
+
+    app_ver = app_version()
+    if live:
+        if live.get("version") != app_ver:
+            warn(f"活体快照版本 {live.get('version')} ≠ 当前安装 {app_ver}，需要重新采集")
+        else:
+            ok(f"活体快照版本一致：{app_ver}")
+        ok(f"服务 {live['counts']['services']} 个 / 槽位 {live['counts']['slots']} 个")
+
+    doc = WB_ROOT / "docs" / "interface-baseline.md"
+    lines = [
+        "# 接口基线（自动生成）",
+        "",
+        f"- 生成时间：{build['generatedAt']}",
+        f"- DSH 版本：{app_ver}",
+        f"- 工作台 profile：{WB_PROFILE}",
+        f"- 组装行数：{build['totals']['rows']}（禁用 {build['totals']['disabled']}）",
+        "",
+        "## profile 分层（每个 bundle 产出的行）",
+        "",
+        "| 层 | 行数 | 插件 id |",
+        "|---|---|---|",
+    ]
+    for entry in build["layers"]:
+        ids = ", ".join(("~~" + r["id"] + "~~") if r["disabled"] else r["id"] for r in entry["rows"])
+        lines.append(f"| {entry['layer']} | {len(entry['rows'])} | {ids} |")
+
+    if live:
+        lines += [
+            "",
+            f"## 活体接口（版本 {live['version']}）",
+            "",
+            f"- 宿主服务 **{live['counts']['services']}** 个（`ctx.<key>`）",
+            f"- 前端槽位 **{live['counts']['slots']}** 个",
+            "",
+            "### 常用挂载点",
+            "",
+            "| 槽位 | 类型 | 作用 |",
+            "|---|---|---|",
+        ]
+        want = ["main", "sidebar.panellist", "sidebar.footer.action", "settings.section",
+                "settings.general.item", "shell.overlay", "conversation.input.right",
+                "conversation.input.left", "plugins.detail.section", "conversation.view",
+                "conversation.chat.node", "conversation.composer.dock"]
+        by_name = {s["name"]: s for s in live["slots"]}
+        for name in want:
+            s = by_name.get(name)
+            if s:
+                purpose = s["purpose"].replace("|", "\\|")
+                lines.append(f"| `{name}` | {s['kind']} | {purpose[:110]} |")
+        lines += ["", "### 宿主服务（前 30）", "", "| key | 说明 |", "|---|---|"]
+        for s in live["services"][:30]:
+            desc = (s["description"] or "")[:90].replace("|", "\\|")
+            lines.append(f"| `{s['key']}` | {desc} |")
+
+    doc.parent.mkdir(parents=True, exist_ok=True)
+    doc.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    ok(f"文档 → {doc}")
+    return 0
+
+
 def print_logs(n: int = 40) -> None:
     for name in ("workbench.out.log", "workbench.err.log", "watchdog.log"):
         p = LOG_DIR / name
@@ -514,6 +653,7 @@ def main(argv: list[str]) -> int:
         "doctor": lambda: cmd_doctor(),
         "status": lambda: cmd_status(),
         "watch": lambda: cmd_watch(),
+        "api": lambda: cmd_api(),
         "sync-app": lambda: cmd_sync_app(args.force),
         "start": lambda: cmd_start(args.with_watchdog),
         "stop": lambda: cmd_stop(),
