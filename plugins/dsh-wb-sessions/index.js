@@ -203,11 +203,19 @@ export function apply(ctx) {
         // 主驾摘要没有标题，这里从会话日志补上（只读主驾文件，120 秒缓存）
         if (Array.isArray(body && body.items)) {
           for (const item of body.items) {
-            try {
-              item.title = (await readSessionTitle(item.sessionId)) || ''
-            } catch {
-              item.title = ''
+            // 优先用摘要投影里的标题（主驾已经算好了）；日志解析只作兜底
+            const projected = item.projections && item.projections.values
+              ? item.projections.values.title
+              : ''
+            let title = typeof projected === 'string' ? projected.trim() : ''
+            if (!title) {
+              try {
+                title = (await readSessionTitle(item.sessionId)) || ''
+              } catch {
+                title = ''
+              }
             }
+            item.title = title
           }
         }
         sendJson(res, r.status, body)
