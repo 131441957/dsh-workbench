@@ -291,6 +291,50 @@ def cmd_plugins(action: str = "list", spec: str = "", bundle: str = "") -> int:
     return 2
 
 
+def current_url() -> str | None:
+    """取最新的带 token 入口（token 每次重启都换）。"""
+    log = LOG_DIR / "workbench.out.log"
+    if log.exists():
+        tokens = re.findall(r"token=([A-Za-z0-9_\-]+)", log.read_text(encoding="utf-8", errors="replace"))
+        if tokens:
+            url = f"http://127.0.0.1:{WB_PORT}/?token={tokens[-1]}"
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            (STATE_DIR / "workbench-url.txt").write_text(url, encoding="ascii")
+            return url
+    p = STATE_DIR / "workbench-url.txt"
+    return p.read_text(encoding="ascii").strip() if p.exists() else None
+
+
+def cmd_url() -> int:
+    url = current_url()
+    if not url:
+        bad("还没有入口（工作台没启动过）：wb.py start")
+        return 1
+    print(url)
+    return 0
+
+
+def cmd_open() -> int:
+    """确保工作台在跑，然后用默认浏览器打开带 token 的入口（裸 URL 会 401）。"""
+    if not port_open(WB_PORT):
+        info("工作台没在跑，先启动…")
+        if cmd_start(True) != 0:
+            return 1
+        time.sleep(1)
+    url = current_url()
+    if not url:
+        bad("拿不到入口 URL")
+        return 1
+    try:
+        os.startfile(url)  # noqa: S606  (Windows 专用，打开默认浏览器)
+    except Exception as exc:  # noqa: BLE001
+        warn(f"自动打开失败（{exc}），手动复制这个地址：")
+        print(url)
+        return 1
+    ok(f"已在浏览器打开 → {url}")
+    return 0
+
+
 def cmd_compat() -> int:
     """版本/兼容性视角：主驾 vs 工作台 vs 插件声明的 peer 版本。"""
     head("版本")
@@ -418,6 +462,30 @@ BENCH_PATCH = """# 工作台（bench）补丁层：不接 agent，只当插件�
 """
 
 
+def sync_credentials() -> None:
+    """把主驾的凭据（含 DEEPSEEK_API_KEY）复制到工作台，避免界面反复要求填 API。"""
+    src = MAIN_HOME / ".credentials.yaml"
+    dst = WB_HOME / ".credentials.yaml"
+    if not src.exists():
+        warn("主驾没有 .credentials.yaml，工作台会保持匿名（界面可能要求填 API）")
+        return
+    need = True
+    if dst.exists():
+        try:
+            s, d = src.read_text(encoding="utf-8", errors="replace"), dst.read_text(encoding="utf-8", errors="replace")
+            if "DEEPSEEK_API_KEY" in d or "DEEPSEEK_API_KEY" not in s:
+                need = False
+        except Exception:
+            need = True
+    if need:
+        WB_HOME.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        ok(f"已同步凭据 → {dst}")
+    anon = MAIN_HOME / ".anonymous-user-id"
+    if anon.exists() and not (WB_HOME / ".anonymous-user-id").exists():
+        shutil.copy2(anon, WB_HOME / ".anonymous-user-id")
+
+
 def ensure_profile() -> int:
     prof_dir = WB_HOME / "profiles" / WB_PROFILE
     pkg = prof_dir / "package.json"
@@ -463,6 +531,7 @@ def cmd_start(with_watchdog: bool = True) -> int:
 
     if ensure_profile() != 0:
         return 1
+    sync_credentials()
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     STATE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -835,6 +904,8 @@ def main(argv: list[str]) -> int:
         "api": lambda: cmd_api(),
         "compat": lambda: cmd_compat(),
         "plugins": lambda: cmd_plugins(args.sub or "list", (args.rest[0] if args.rest else ""), args.bundle),
+        "url": lambda: cmd_url(),
+        "open": lambda: cmd_open(),
         "rollback": lambda: cmd_rollback(),
         "sync-app": lambda: cmd_sync_app(args.force),
         "start": lambda: cmd_start(args.with_watchdog),

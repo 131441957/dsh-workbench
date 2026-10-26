@@ -39,7 +39,7 @@
 | 8 | `wb.py scaffold` | 新建插件模板（package.json / patch / client.js / index.js） | Python | ⬜ 待造 |
 | 9 | 主驾「工作台接入」状态插件 | 主界面显示工作台在线/离线（主驾**唯一**改动） | JS | ⬜ 待造 |
 | 10 | 工作台 UI 外壳 | 注入式改皮/布局（`webServer.tapIndex`），不碰安装目录 | JS | ⬜ 待造 |
-| 11 | 无窗口快捷方式 | 桌面一键启动，不闪 cmd 窗口 | .lnk + pythonw | ⬜ 待造 |
+| 11 | 无窗口快捷方式 | 桌面「DSH 工作台」→ `pythonw wb.py open`，不闪窗、自动带最新 token | .lnk + pythonw | ✅ 已完成 |
 
 ## 四、环境现状（`wb.py doctor` 实测）
 
