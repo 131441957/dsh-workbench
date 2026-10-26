@@ -449,9 +449,29 @@ def cmd_supervise(interval: float = 8.0) -> int:
 
 
 def cmd_page() -> int:
-    """只打开页面：不启动任何东西（工作台没跑就直说）。"""
+    """只打开页面：缺什么自己补（没装就自装、守护没跑就拉起），但不会替你改配置。"""
+    if not APP_DSH_CMD.exists():
+        warn("还没装运行时 → 自动安装")
+        if cmd_install(False) != 0:
+            return 1
+    else:
+        mv, wv = main_version(), app_version()
+        if mv not in ("unknown", "") and wv != mv:
+            warn(f"版本不一致（主驾 {mv} / 工作台 {wv}）→ 自动同步运行时（旧版会备份）")
+            if cmd_sync_app(True) != 0:
+                warn("自动同步失败，继续用旧版启动")
     if not port_open(WB_PORT):
-        warn(f"工作台没在跑（{WB_PORT} 无响应）。先双击「DSH 工作台」，或等自动伴随把它拉起来。")
+        if not find_supervisors() and not SUPERVISOR_FILE.exists():
+            warn("自动伴随没在跑 → 拉起")
+            cmd_resume()
+        else:
+            warn(f"{WB_PORT} 无响应 → 尝试拉起工作台")
+            cmd_start(True)
+        deadline = time.time() + 45
+        while time.time() < deadline and not port_open(WB_PORT):
+            time.sleep(1)
+    if not port_open(WB_PORT):
+        bad(f"工作台仍然没起来（{WB_PORT}）。看日志：wb.py logs")
         return 1
     url = current_url()
     if not url:
@@ -528,6 +548,89 @@ def cmd_resume() -> int:
     return 1
 
 
+def make_shortcuts() -> None:
+    """桌面「仅打开页面」+ 启动项「自动伴随」两个快捷方式（幂等，重复执行无副作用）。"""
+    pyw = Path(sys.executable).with_name("pythonw.exe")
+    exe = pyw if pyw.exists() else Path(sys.executable)
+    script = str(Path(__file__).resolve())
+    desktop = Path(os.environ.get("USERPROFILE", r"C:\Users\Administrator")) / "Desktop"
+    startup = Path(os.environ.get("APPDATA", "")) / r"Microsoft\Windows\Start Menu\Programs\Startup"
+    icon = WB_ROOT / "app" / "resources" / "tray.ico"
+    ps = f'''
+$ws = New-Object -ComObject WScript.Shell
+$d = $ws.CreateShortcut("{desktop}\\DSH 工作台.lnk")
+$d.TargetPath = "{exe}"
+$d.Arguments = '"{script}" page'
+$d.WorkingDirectory = "{WB_ROOT}"
+$d.Description = "仅打开 DSH 工作台页面（服务由自动伴随负责）"
+$d.IconLocation = "{icon},0"
+$d.Save()
+$s = $ws.CreateShortcut("{startup}\\DSH 工作台（自动伴随）.lnk")
+$s.TargetPath = "{exe}"
+$s.Arguments = '"{script}" supervise'
+$s.WorkingDirectory = "{WB_ROOT}"
+$s.Description = "主程序在时自动拉起 DSH 工作台，关闭时自动收掉"
+$s.IconLocation = "{icon},0"
+$s.Save()
+Write-Output "shortcuts-ok"
+'''
+    out = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True,
+                         timeout=90, creationflags=RUNFLAGS, encoding="utf-8", errors="replace").stdout
+    if "shortcuts-ok" in (out or ""):
+        ok(f"快捷方式已就绪：{desktop}\\DSH 工作台.lnk")
+        ok(f"开机自启已就绪：{startup}\\DSH 工作台（自动伴随）.lnk")
+    else:
+        warn(f"快捷方式创建异常：{(out or '').strip()[:200]}")
+
+
+def cmd_install(force: bool = False) -> int:
+    """自主安装 / 修复 / 升级：幂等，可以反复跑。"""
+    head("工作台安装器")
+    ok(f"根目录 {WB_ROOT}")
+
+    for name in ("app", "home", "plugins", "ui", "state", "logs", "seeds", "docs", "backups", "tools"):
+        (WB_ROOT / name).mkdir(parents=True, exist_ok=True)
+    ok("目录结构就绪")
+
+    if force or not APP_DSH_CMD.exists():
+        if cmd_sync_app(force) != 0:
+            bad("运行时同步失败，安装中止")
+            return 1
+    else:
+        ok(f"运行时已存在：{app_version()}（要重装用 install --force）")
+
+    if ensure_profile() != 0:
+        return 1
+    sync_credentials()
+
+    env = dict(os.environ, DSH_HOME=str(WB_HOME), DSH_PROFILE=WB_PROFILE)
+    proc = subprocess.run(
+        ["cmd", "/c", str(APP_DSH_CMD), "plugin", "--profile", WB_PROFILE, "install"],
+        env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=900, creationflags=RUNFLAGS,
+    )
+    (ok if proc.returncode == 0 else warn)(f"插件依赖安装：退出码 {proc.returncode}")
+
+    make_shortcuts()
+
+    if not listening_pids(WB_PORT):
+        cmd_start(True)
+    else:
+        ok(f"工作台已在运行（{WB_PORT}）")
+    if not find_supervisors():
+        cmd_resume()
+    else:
+        ok("自动伴随已在运行")
+
+    head("自检")
+    cmd_doctor()
+    url = current_url()
+    if url:
+        ok(f"入口：{url}")
+    ok("安装完成（可重复执行：install / install --force）")
+    return 0
+
+
 def cmd_compat() -> int:
     """版本/兼容性视角：主驾 vs 工作台 vs 插件声明的 peer 版本。"""
     head("版本")
@@ -582,7 +685,7 @@ def cmd_sync_app(force: bool = False) -> int:
         bad(f"主安装不存在：{MAIN_INSTALL}")
         return 1
     was_running = bool(listening_pids(WB_PORT))
-    if APP_ROOT.exists():
+    if APP_ROOT.exists() and any(APP_ROOT.iterdir()):
         # 先停掉在跑的工作台，再把旧安装改名备份（秒级完成、可回滚；不复制 1.7GB）
         if was_running:
             cmd_stop()
@@ -1107,6 +1210,7 @@ def main(argv: list[str]) -> int:
         "supervisor": lambda: cmd_supervisor_status(),
         "suspend": lambda: cmd_suspend(),
         "resume": lambda: cmd_resume(),
+        "install": lambda: cmd_install(args.force),
         "rollback": lambda: cmd_rollback(),
         "sync-app": lambda: cmd_sync_app(args.force),
         "start": lambda: cmd_start(args.with_watchdog),

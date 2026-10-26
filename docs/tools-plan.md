@@ -88,3 +88,10 @@ java        缺失
   - 实测：`workbench missing → starting`；手动 stop 后 8 秒内自动恢复
 - **临时要停**：`wb.py suspend`（先停守护再停服务，否则会被拉回来）；恢复：`wb.py resume`
 - 坑：`wb.py stop` 曾把 pids.json 整个清空，导致 supervisor 记录丢失；现在只清 serve/watchdog，且 `read_pids()` 兼容 BOM（PowerShell 写 UTF8 会带 BOM，`json.loads` 会直接失败）。
+
+## 自主安装（2026-10-26 实测）
+
+- **双击桌面「DSH 工作台」就是安装器**：没装运行时 → 自动复制安装（约 3 秒 / 10009 文件）→ 铺 profile 与种子 → 装插件依赖 → 重建快捷方式 → 起工作台与守护 → 打开页面。
+- **主驾升级后也走同一条路**：检测到「主驾版本 ≠ 工作台版本」→ 自动 `sync-app --force`（旧运行时改名备份到 `backups\`）→ 再启动。
+- 命令行等价：`wb.py install`（幂等，可反复跑）、`wb.py install --force`（强制重装）、`wb.py rollback`（回滚运行时）。
+- 实测：把 `app\` 整个挪走后跑 install → 3 秒铺回 1691MB → 页面 200、`/wb-web/health` 正常。
