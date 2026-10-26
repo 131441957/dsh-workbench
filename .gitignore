@@ -9,3 +9,4 @@ __pycache__/
 attic/
 config.json
 ui/landing.html
+MANIFEST.json

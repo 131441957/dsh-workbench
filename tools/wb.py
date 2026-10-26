@@ -1113,8 +1113,9 @@ def cmd_restore(target: str = "latest") -> int:
                     shutil.copy2(src, dst)
         ok(f"当前状态已另存 → {safety}")
 
-        zf.extractall(WB_ROOT)
-        ok("快照已还原到工作台根目录")
+        for meta in manifest.get("files", []):
+            zf.extract(meta["arc"], WB_ROOT)
+        ok("快照已还原到工作台根目录（只还原清单里的文件，MANIFEST 不落地）")
 
     if ensure_profile() != 0:
         warn("profile 复原失败，检查 seeds/bench 与快照内容")
