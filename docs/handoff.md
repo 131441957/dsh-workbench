@@ -43,7 +43,7 @@ curl  http://127.0.0.1:59430/wb-sessions/health  # 主驾端口/token
 1. **会话标题**：已完成，并已运行时复核（2026-10-26 22:48，`/wb-sessions/list` 三条标题均为中文正常：`检查 docs handoff.md 文件` / `DeepSeek harness 附属 Web 隔离方案` / `检查E盘可用插件`）。取值顺序=投影 `projections.values.title` → 日志兜底 → cwd 末段 → `#短号`。
 2. **GitHub 远程仓**：用户明确「暂不上传」。
 3. **能力注册表的“按名调用”通路**：等第一个**自研插件**出现再做（原则：只登记主驾没有的能力，`package.json` 的 `dsh.workbench.capabilities` 声明）。
-4. **待用户拍板**：主 profile 里除 `meow-memory` 还有 `dsh-meow-panel` / `persona-preset` / 4 个第三方功能包——算不算“要隔离的插件”（A 宽松 / B 严格）。
+4. **已关闭（2026-10-26 用户拍板）**：主 profile 现有插件（除 `meow-memory` 外还有 `dsh-meow-panel` / `persona-preset` / 4 个第三方功能包）**一律不动、不隔离、不搬**。用户原话「不用，现在的插件都不用动，因为我暂时不会去修改它」。别再拿 A/B 方案来问。
 5. 可选：细粒度会话事件推送（现在只有 tick 汇总）；`/wb-web` 与主驾 `web_search` 重复，可考虑下线。
 
 ## 用户偏好
