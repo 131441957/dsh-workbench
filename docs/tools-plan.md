@@ -188,3 +188,10 @@ java        缺失
 - 结论：**只禁用“纯页面、不提供服务”的行**。目前工作台禁用了 `ui-plugin-manager`（插件页）与 `ui-schedule`（自动化任务），实测无 pending。
 - 「工作区」改为**按文字隐藏**（`ui\workbench.js` 的 HIDE_TEXTS = 插件/自动化任务/工作区/默认工作区，配合 MutationObserver 节流重扫），不动插件依赖，改完刷新即生效、删掉脚本即恢复。
 - 排查口诀：页面报 `pending (waiting for service: xxx)` 时，去看是哪个被禁用的行提供了该服务——先恢复它，再改用隐藏。
+
+## 隐藏原版入口的正确姿势（2026-10-26，第二次修正）
+
+- 只设 `el.style.display='none'` 不够：**React 重绘会用自身 props 覆盖 style**，元素又露出来；而“已处理”标记（dataset）会让后续 sweep 跳过它。
+- 正确做法：①注入 `<style>.wb-hidden{display:none!important}</style>` ②每次 sweep 都**重新加类**（不要跳过已处理的元素）③MutationObserver 监听 `childList + attributes(style/class)`，节流 200ms ④每 2 秒兜底巡检一次。
+- 工作台没有 agent 时，应用自己会尝试新建会话并弹 `新建会话失败 / no agent factory` toast——把这类浮层也一并隐藏（SILENCE_TEXTS）。
+- 调试入口：控制台执行 `__wbSweep()` 手动重扫，`__WB_UI__.hidden` 看隐藏了什么。
