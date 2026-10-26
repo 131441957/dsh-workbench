@@ -170,6 +170,6 @@ java        缺失
     config:
       welcomeNoticeVersion: "2026-09-28.1"
   ```
-- 已写入两处：工作台 `home\profiles\bench\cordis.patch.yml`（立即生效，刷新即可）与主驾 `E:\DSH\home\profiles\desktop\cordis.patch.yml`（**需重启主程序**才生效；改前备份 `E:\newwork\backup\pre-ui-notice-*`）。两处都用 `--dump-config` 验证过组装结果含该值、零报错。
+- 只写入工作台 `home\profiles\bench\cordis.patch.yml`（立即生效，刷新即可）。**主驾 profile 不写入**：曾越线改过一次，已按备份 `E:\newwork\backup\pre-ui-notice-20261026-210347` 完整还原（哈希一致、无残留）。主驾要去掉弹窗，由用户自己在界面点一次「继续」，或明确授权后再改。
 - 双保险：`ui\workbench.js` 里加了自动点「继续」的兜底（MutationObserver 未用，改为定时尝试点击对话框里的「继续」按钮，最多 40 次 × 0.5s），版本号将来变了也能自动关掉。
 - 想让它重新出现：把版本值改成别的字符串即可。
