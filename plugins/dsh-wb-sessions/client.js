@@ -163,13 +163,18 @@ window.__ModuleLoader__.load({
       itemSub: { color: 'var(--dsw-alias-label-secondary)', fontSize: 10, marginTop: 2 },
       right: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 },
       rightHead: { padding: '8px 10px', borderBottom: '1px solid var(--dsw-alias-border-secondary)', fontSize: 12, display: 'flex', gap: 8, alignItems: 'center' },
-      msgs: { flex: 1, overflow: 'auto', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 14, minHeight: 0 },
-      row: { display: 'flex', flexDirection: 'column', gap: 4, maxWidth: '100%' },
+      msgs: { flex: 1, overflow: 'auto', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 0, minHeight: 0 },
+      row: { display: 'flex', flexDirection: 'column', gap: 3, maxWidth: '100%', paddingTop: 12 },
+      rowFirst: { paddingTop: 0 },
+      rowDivider: { borderTop: '1px solid var(--dsw-alias-border-secondary)' },
       rowUser: { alignItems: 'flex-end' },
       rowOther: { alignItems: 'flex-start' },
-      meta: { fontSize: 10, color: 'var(--dsw-alias-label-secondary)' },
+      meta: { fontSize: 10, color: 'var(--dsw-alias-label-secondary)', opacity: 0.75 },
       bubble: { maxWidth: '86%', padding: '9px 12px', borderRadius: 10, fontSize: 12.5, minWidth: 0, overflowWrap: 'anywhere' },
-      bubbleUser: { background: 'var(--dsw-alias-bg-secondary)', border: '1px solid var(--dsw-alias-border-secondary)' },
+      bubbleUser: {
+        background: 'rgba(64, 132, 255, 0.16)',
+        border: '1px solid rgba(64, 132, 255, 0.45)',
+      },
       bubbleAssistant: { background: 'transparent', border: '1px solid var(--dsw-alias-border-secondary)' },
       more: { marginTop: 4, fontSize: 11, color: 'var(--dsw-alias-label-link, #3b82f6)', cursor: 'pointer', background: 'none', border: 'none', padding: 0 },
       composer: { borderTop: '1px solid var(--dsw-alias-border-secondary)', padding: 8, display: 'flex', gap: 6, alignItems: 'flex-end' },
@@ -185,6 +190,14 @@ window.__ModuleLoader__.load({
       const body = await res.json().catch(() => ({}))
       if (!res.ok || body.ok === false) throw new Error(body.error || `HTTP ${res.status}`)
       return body
+    }
+
+    function fmtClock(ms) {
+      if (!ms) return ''
+      const d = new Date(Number(ms))
+      if (Number.isNaN(d.getTime())) return ''
+      const pad = (n) => String(n).padStart(2, '0')
+      return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
     }
 
     function fmtTime(ms) {
@@ -203,13 +216,18 @@ window.__ModuleLoader__.load({
         h('path', { d: 'M4 5h16v11H8l-4 3z' }))
     }
 
-    function Message({ message }) {
+    function Message({ message, index }) {
       const [expanded, setExpanded] = useState(false)
       const isUser = message.role === 'user'
       const long = message.text.length > 1800
       const shown = long && !expanded ? message.text.slice(0, 1800) + '…' : message.text
-      return h('div', { style: isUser ? { ...styles.row, ...styles.rowUser } : { ...styles.row, ...styles.rowOther } },
-        h('div', { style: styles.meta }, `${isUser ? '你' : '助手'} · #${message.seq} · ${fmtTime(message.time)}`),
+      const rowStyle = {
+        ...styles.row,
+        ...(index === 0 ? styles.rowFirst : styles.rowDivider),
+        ...(isUser ? styles.rowUser : styles.rowOther),
+      }
+      return h('div', { style: rowStyle },
+        h('div', { style: styles.meta }, fmtClock(message.time)),
         h('div', { style: isUser ? { ...styles.bubble, ...styles.bubbleUser } : { ...styles.bubble, ...styles.bubbleAssistant } },
           renderMarkdown(shown),
           long
@@ -316,7 +334,7 @@ window.__ModuleLoader__.load({
           h('div', { style: styles.msgs },
             messages.length === 0
               ? h('div', { style: styles.notice }, selected ? '这个会话还没有可显示的消息' : '左边选一个会话看历史')
-              : messages.map((m) => h(Message, { key: `${m.seq}`, message: m })),
+              : messages.map((m, i) => h(Message, { key: `${m.seq}`, message: m, index: i })),
             h('div', { ref: bottomRef }),
           ),
           h('div', { style: styles.composer },
