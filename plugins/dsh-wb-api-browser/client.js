@@ -92,8 +92,10 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function Panel() {
-      const [tab, setTab] = useState('plugins')
+    function Panel(props) {
+      const fixedTab = props && props.fixedTab
+      const hideTabs = Boolean(props && props.hideTabs)
+      const [tab, setTab] = useState(fixedTab || 'services')
       const [live, setLive] = useState(null)
       const [build, setBuild] = useState(null)
       const [status, setStatus] = useState(null)
@@ -101,6 +103,20 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState('')
       const [query, setQuery] = useState('')
       const [expanded, setExpanded] = useState('')
+
+      useEffect(() => {
+        // 允许外部（顶栏）切到指定标签页：window.__wbApiSelect('plugins')
+        const select = (id) => {
+          if (!fixedTab && ['plugins', 'services', 'slots', 'build', 'status'].includes(id)) setTab(id)
+        }
+        window.__wbApiSelect = select
+        const onEvent = (event) => select(event && event.detail)
+        window.addEventListener('wb:select-tab', onEvent)
+        return () => {
+          window.removeEventListener('wb:select-tab', onEvent)
+          if (window.__wbApiSelect === select) delete window.__wbApiSelect
+        }
+      }, [])
 
       useEffect(() => {
         let alive = true
@@ -200,20 +216,22 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { style: styles.header },
-          h('span', { style: styles.title }, '工作台状态 v2'),
+          h('span', { style: styles.title }, fixedTab === 'plugins' ? '工作台插件' : '工作台状态 v2'),
           h('span', { style: styles.badge }, live ? `DSH ${live.version}` : '未采集'),
-          TABS.map((t) =>
-            h(
-              'button',
-              {
-                key: t.id,
-                type: 'button',
-                style: tab === t.id ? { ...styles.chip, ...styles.chipActive } : styles.chip,
-                onClick: () => setTab(t.id),
-              },
-              t.label,
-            ),
-          ),
+          hideTabs
+            ? null
+            : TABS.map((t) =>
+                h(
+                  'button',
+                  {
+                    key: t.id,
+                    type: 'button',
+                    style: tab === t.id ? { ...styles.chip, ...styles.chipActive } : styles.chip,
+                    onClick: () => setTab(t.id),
+                  },
+                  t.label,
+                ),
+              ),
           h('input', {
             style: styles.search,
             placeholder: '过滤…',
@@ -265,6 +283,16 @@ window.__ModuleLoader__.load({
           ),
         )
         ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: 'wb-api' }, Panel))
+        // 插件清单单独成一个面板（顶栏「插件」指向它），不与「状态」重复
+        ctx.slots.inject('sidebar.panellist', () =>
+          ctx.slots.register(
+            { name: 'sidebar.panellist', id: 'wb-plugins', order: 41, label: () => '插件' },
+            Icon,
+          ),
+        )
+        ctx.slots.inject('main', () =>
+          ctx.slots.register({ name: 'main', key: 'wb-plugins' }, () => h(Panel, { fixedTab: 'plugins', hideTabs: true })),
+        )
       },
     }
   },

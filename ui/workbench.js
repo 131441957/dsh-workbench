@@ -93,9 +93,17 @@
   }
 
   // ── 3) 把侧栏藏起来，换成顶部导航 ────────────────────────────────────
-  // 顶栏标签 → 原侧栏里的同名入口（隐藏元素也可被 click 触发）
+  // 顶栏标签分组：左侧（主驾会话 / 插件），右侧（状态 / 设置）
+  const TABS_LEFT = [
+    { label: '主驾会话', entry: '主驾会话' },
+    { label: '插件', entry: '插件' },
+  ]
+  const TABS_RIGHT = [
+    { label: '状态', entry: '状态', panelTab: 'services' },
+    { label: '设置', entry: '设置' },
+  ]
+  const TABS = [...TABS_LEFT, ...TABS_RIGHT]
   const DEFAULT_PANEL = '状态'
-  const TABS = ['主驾会话', '插件', '状态', '设置']
 
   const findButton = (text) =>
     Array.from(document.querySelectorAll('button, a, [role="button"]')).find((el) => textOf(el) === text)
@@ -129,17 +137,42 @@
     }
   }
 
-  const clickTab = (text) => {
-    const btn = findButton(text)
-    if (btn) { btn.click(); markActive(text) }
+  const applyPanelTab = (id) => {
+    if (!id) return
+    const fire = () => {
+      try {
+        if (typeof window.__wbApiSelect === 'function') window.__wbApiSelect(id)
+        window.dispatchEvent(new CustomEvent('wb:select-tab', { detail: id }))
+      } catch { /* 面板还没挂载就算了 */ }
+    }
+    fire()
+    setTimeout(fire, 250)
+    setTimeout(fire, 700)
   }
 
-  const markActive = (text) => {
+  const clickTab = (tab) => {
+    const btn = findButton(tab.entry)
+    if (btn) btn.click()
+    applyPanelTab(tab.panelTab)
+    markActive(tab.label)
+  }
+
+  const markActive = (label) => {
     const bar = document.getElementById('wb-topbar')
     if (!bar) return
-    for (const tab of bar.querySelectorAll('button.wb-tab')) {
-      tab.classList.toggle('wb-active', tab.dataset.wbTab === text)
+    for (const node of bar.querySelectorAll('button.wb-tab')) {
+      node.classList.toggle('wb-active', node.dataset.wbTab === label)
     }
+  }
+
+  const makeTab = (tab) => {
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'wb-tab'
+    btn.dataset.wbTab = tab.label
+    btn.textContent = tab.label
+    btn.addEventListener('click', () => clickTab(tab))
+    return btn
   }
 
   const buildTopbar = () => {
@@ -151,19 +184,17 @@
     brand.innerHTML = 'DSH 工作台<small>59430</small>'
     bar.appendChild(brand)
 
-    for (const text of TABS) {
-      const btn = document.createElement('button')
-      btn.type = 'button'
-      btn.className = 'wb-tab'
-      btn.dataset.wbTab = text
-      btn.textContent = text
-      btn.addEventListener('click', () => clickTab(text))
-      bar.appendChild(btn)
+    for (const tab of TABS_LEFT) {
+      bar.appendChild(makeTab(tab))
     }
 
     const spacer = document.createElement('div')
     spacer.className = 'wb-spacer'
     bar.appendChild(spacer)
+
+    for (const tab of TABS_RIGHT) {
+      bar.appendChild(makeTab(tab))
+    }
 
     const dot = document.createElement('span')
     dot.className = 'wb-dot'
@@ -198,7 +229,7 @@
     reserveTopSpace()
     if (!state.activeMarked && findButton(DEFAULT_PANEL)) {
       state.activeMarked = true
-      markActive(DEFAULT_PANEL)
+      markActive(TABS.find((t) => t.entry === DEFAULT_PANEL)?.label || DEFAULT_PANEL)
     }
   }
 
