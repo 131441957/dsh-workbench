@@ -78,6 +78,8 @@ class App:
         top.pack(fill="x")
         self.version_label = ttk.Label(top, text="状态读取中…", font=("Segoe UI", 10, "bold"))
         self.version_label.pack(anchor="w")
+        ttk.Label(top, foreground="#777", font=("Segoe UI", 8),
+                  text="主驾 = 你聊天用的 harness；工作台 = 插件宿主（59430）。两边版本应一致，不一致就点「同步运行时」。").pack(anchor="w")
         self.detail_label = ttk.Label(top, text="", foreground="#555")
         self.detail_label.pack(anchor="w", pady=(2, 0))
         self.paths_label = ttk.Label(top, text="路径探测中…", foreground="#3a6", font=("Consolas", 9))
