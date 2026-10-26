@@ -158,9 +158,11 @@ window.__ModuleLoader__.load({
       controls: { display: 'flex', gap: 6, padding: '6px 8px', borderBottom: '1px solid var(--dsw-alias-border-secondary)' },
       search: { flex: '1 1 auto', minWidth: 0, padding: '3px 6px', fontSize: 11, borderRadius: 6, border: '1px solid var(--dsw-alias-border-secondary)', background: 'var(--dsw-alias-bg-base)', color: 'var(--dsw-alias-label-primary)', font: 'inherit' },
       sortSelect: { flex: '0 0 auto', padding: '2px 4px', fontSize: 11, borderRadius: 6, border: '1px solid var(--dsw-alias-border-secondary)', background: 'var(--dsw-alias-bg-secondary)', color: 'var(--dsw-alias-label-primary)', font: 'inherit' },
-      group: { display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px 4px', position: 'sticky', top: 0, background: 'var(--dsw-alias-bg-base)', zIndex: 1 },
-      groupName: { fontSize: 10.5, fontWeight: 600, color: 'var(--dsw-alias-label-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-      groupCount: { fontSize: 10, color: 'var(--dsw-alias-label-secondary)', opacity: 0.7, flex: '0 0 auto' },
+      groupBlock: { marginTop: 6, paddingBottom: 2 },
+      group: { display: 'flex', alignItems: 'center', gap: 6, padding: '9px 10px 7px', position: 'sticky', top: 0, zIndex: 1, background: 'var(--dsw-alias-bg-base)', borderTop: '1px solid var(--dsw-alias-border-secondary)', cursor: 'pointer' },
+      groupChevron: { fontSize: 9, opacity: 0.6, flex: '0 0 auto', width: 10 },
+      groupName: { fontSize: 11.5, fontWeight: 700, color: 'var(--dsw-alias-label-primary)', letterSpacing: '.2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: '1 1 auto', minWidth: 0 },
+      groupCount: { fontSize: 10, padding: '0 6px', borderRadius: 8, background: 'var(--dsw-alias-bg-secondary)', color: 'var(--dsw-alias-label-secondary)', flex: '0 0 auto' },
       itemTop: { display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 },
       dot: { width: 6, height: 6, borderRadius: 3, background: 'var(--dsw-alias-border-secondary)', flex: '0 0 auto' },
       itemTitle: { fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: '1 1 auto', minWidth: 0 },
@@ -168,7 +170,7 @@ window.__ModuleLoader__.load({
       title: { fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, flex: '0 1 auto' },
       badge: { fontSize: 10, padding: '1px 6px', borderRadius: 8, background: 'var(--dsw-alias-bg-secondary)', color: 'var(--dsw-alias-label-secondary)', flex: '0 0 auto' },
       list: { flex: 1, overflow: 'auto', minHeight: 0 },
-      item: { padding: '7px 10px', borderBottom: '1px solid var(--dsw-alias-border-secondary)', cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+      item: { padding: '6px 10px 7px 20px', borderBottom: '1px solid var(--dsw-alias-border-secondary)', borderLeft: '2px solid transparent', cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
       itemActive: { background: 'var(--dsw-alias-bg-secondary)' },
       itemSub: { color: 'var(--dsw-alias-label-secondary)', fontSize: 10, marginTop: 2 },
       right: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 },
@@ -218,6 +220,12 @@ window.__ModuleLoader__.load({
     }
 
     // 分组：按工作区（cwd 末段）分组；组内按排序模式排序
+    // 行标题：工作区模式下组头已经显示工作区名，行内改用短号，避免重复
+    function rowTitle(s, group) {
+      const short = '#' + s.sessionId.replace('session-', '').slice(0, 8)
+      if (group && group.key && String(group.key).startsWith('ws:')) return short
+      return sessionLabel(s)
+    }
     function buildGroups(items, mode, needle) {
       const q = needle ? needle.toLowerCase() : ''
       const list = items.filter((s) => !q
@@ -289,6 +297,7 @@ window.__ModuleLoader__.load({
       const [live, setLive] = useState(null)
       const [query, setQuery] = useState('')
       const [sortMode, setSortMode] = useState('recent')
+      const [collapsedGroups, setCollapsedGroups] = useState(new Set())
       const listTimer = useRef(0)
       const bottomRef = useRef(null)
 
@@ -370,6 +379,14 @@ window.__ModuleLoader__.load({
         } catch (e) { setError(String(e.message || e)) } finally { setBusy(false) }
       }
 
+      const toggleGroup = (key) => {
+        setCollapsedGroups((prev) => {
+          const next = new Set(prev)
+          if (next.has(key)) next.delete(key)
+          else next.add(key)
+          return next
+        })
+      }
       const groups = useMemo(() => buildGroups(sessions, sortMode, query), [sessions, sortMode, query])
 
       const current = sessions.find((s) => s.sessionId === selected)
@@ -407,25 +424,33 @@ window.__ModuleLoader__.load({
           h('div', { style: styles.list },
             groups.length === 0
               ? h('div', { style: styles.notice }, sessions.length === 0 ? '没有会话（主驾没开或还没会话）' : '没有匹配的会话')
-              : groups.map((g) => h('div', { key: g.key },
-                  h('div', { style: styles.group },
-                    h('span', { style: styles.groupName }, g.label),
-                    h('span', { style: styles.groupCount }, String(g.items.length)),
-                  ),
-                  g.items.map((s) => h('div', {
-                    key: s.sessionId,
-                    style: s.sessionId === selected ? { ...styles.item, ...styles.itemActive } : styles.item,
-                    onClick: () => setSelected(s.sessionId),
-                    title: s.sessionId + '\n' + (s.cwd || ''),
-                  },
-                    h('div', { style: styles.itemTop },
-                      h('span', { style: s.running ? { ...styles.dot, background: '#4caf50' } : styles.dot }),
-                      h('span', { style: styles.itemTitle }, sessionLabel(s)),
-                      h('span', { style: styles.itemTime }, fmtTime(s.updatedAt)),
+              : groups.map((g) => {
+                  const collapsed = collapsedGroups.has(g.key)
+                  return h('div', { key: g.key, style: styles.groupBlock },
+                    h('div', {
+                      style: styles.group,
+                      onClick: () => toggleGroup(g.key),
+                      title: collapsed ? '展开' : '收起',
+                    },
+                      h('span', { style: styles.groupChevron }, collapsed ? '▸' : '▾'),
+                      h('span', { style: styles.groupName }, g.label),
+                      h('span', { style: styles.groupCount }, String(g.items.length)),
                     ),
-                    h('div', { style: styles.itemSub }, s.sessionId.replace('session-', '').slice(0, 8) + (s.blank ? ' · 空会话' : '')),
-                  )),
-                )),
+                    collapsed ? null : g.items.map((s) => h('div', {
+                      key: s.sessionId,
+                      style: s.sessionId === selected ? { ...styles.item, ...styles.itemActive } : styles.item,
+                      onClick: () => setSelected(s.sessionId),
+                      title: s.sessionId + '\n' + (s.cwd || ''),
+                    },
+                      h('div', { style: styles.itemTop },
+                        h('span', { style: s.running ? { ...styles.dot, background: '#4caf50', boxShadow: '0 0 0 3px rgba(76,175,80,.18)' } : styles.dot }),
+                        h('span', { style: styles.itemTitle }, rowTitle(s, g)),
+                        h('span', { style: styles.itemTime }, fmtTime(s.updatedAt)),
+                      ),
+                      h('div', { style: styles.itemSub }, s.sessionId.replace('session-', '').slice(0, 8) + (s.blank ? ' · 空会话' : '')),
+                    )),
+                  )
+                }),
           ),
         ),
         h('div', { style: styles.right },
