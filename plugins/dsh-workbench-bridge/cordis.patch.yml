@@ -1,0 +1,4 @@
+# main-harness bridge patch: inserts the workbench bridge into the desktop profile
+- insert:
+    - id: wb-bridge
+      name: 'dsh-workbench-bridge'

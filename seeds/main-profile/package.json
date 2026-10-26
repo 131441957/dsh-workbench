@@ -1,0 +1,34 @@
+{
+  "name": "dsh-profile-desktop",
+  "private": true,
+  "dependencies": {
+    "@local/dsh-persona-preset": "link:E:/肥鱼工作区/persona-preset",
+    "dsh-community": "file:./desktop-packages/dsh-community-0.2.1-alpha.1-sha256-8402f88d441086286c355f26ff033da0ba07c7ab63e13469b14f75ece922f64d.tgz",
+    "dsh-context": "file:./desktop-packages/dsh-context-0.62.1-sha256-7f901a2e599a7132c7ad92f95a8daa3d5a467ef097130751f49a19e352497597.tgz",
+    "dsh-learning-bridge": "file:./desktop-packages/dsh-learning-bridge-1.0.0-sha256-472585bc9a1515b222df8f1236cb1fbbc14c2e9f338c6250d1603d2fa6cba930.tgz",
+    "dsh-modwatch-bridge": "file:./desktop-packages/dsh-modwatch-bridge-2.0.0-sha256-3c7b6c1449df4387d14061a869828cc1b6fc77e472dab22b032755067754e4dd.tgz",
+    "dsh-pentest-learning-bridge": "file:./desktop-packages/dsh-pentest-learning-bridge-1.0.0-sha256-1c88e9f6d5293b4df79d13e960197cb85537d5bb3c119e2789bd48f19c05ad7b.tgz",
+    "dsh-pocket": "file:./desktop-packages/dsh-pocket-2.10.6-sha256-16283283e4302d2bfa4606e85008aa9770d13c5d9973f7a68a439ac22cd7b4df.tgz",
+    "meow-memory": "link:E:/肥鱼工作区/_plugin-packages/meow-memory",
+    "dsh-meow-panel": "link:E:/肥鱼工作区/meow-panel",
+    "dsh-workbench-bridge": "link:E:/DSH-WORKBENCH/plugins/dsh-workbench-bridge"
+  },
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "dsh-pocket",
+        "dsh-community",
+        "dsh-learning-bridge",
+        "dsh-pentest-learning-bridge",
+        "dsh-modwatch-bridge",
+        "dsh-context",
+        "meow-memory",
+        "@local/dsh-persona-preset",
+        "dsh-meow-panel",
+        "dsh-workbench-bridge"
+      ]
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "dsh-workbench-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Main-harness bridge: shows whether the workbench is attached and exposes workbench_* tools",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  }
+}
