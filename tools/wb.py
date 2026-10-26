@@ -84,6 +84,24 @@ def app_version() -> str:
         return "unknown"
 
 
+def main_version() -> str:
+    rt = MAIN_INSTALL / r"resources\runtime\primary-runtime\runtime.json"
+    try:
+        return json.loads(rt.read_text(encoding="utf-8")).get("desktopVersion", "unknown")
+    except Exception:
+        return "unknown"
+
+
+def plugin_dirs() -> list[Path]:
+    """会挂进 harness 的插件源码目录（工作台 plugins + 现有工作区的喵插件）。"""
+    dirs = [p for p in (WB_ROOT / "plugins").glob("*") if (p / "package.json").exists()]
+    for guess in [Path(r"E:\肥鱼工作区\meow-panel"), Path(r"E:\肥鱼工作区\persona-preset"),
+                  Path(r"E:\肥鱼工作区\_plugin-packages\meow-memory")]:
+        if (guess / "package.json").exists():
+            dirs.append(guess)
+    return dirs
+
+
 def _k32():
     return ctypes.windll.kernel32
 
@@ -212,6 +230,51 @@ def write_pids(data: dict) -> None:
 
 
 # ── 核心：安装同步 ──────────────────────────────────────────────────────
+def cmd_compat() -> int:
+    """版本/兼容性视角：主驾 vs 工作台 vs 插件声明的 peer 版本。"""
+    head("版本")
+    mv, wv = main_version(), app_version()
+    info(f"主 harness   {mv}   ({MAIN_INSTALL})")
+    info(f"工作台       {wv}   ({APP_ROOT})")
+    if mv == wv:
+        ok("两边版本一致（接口行为应当相同）")
+    else:
+        warn(f"版本不一致：主驾 {mv} / 工作台 {wv}")
+        info("→ 工作台是独立整套，主驾升级不会动它；是否跟进由你决定：")
+        info("  · 继续用旧版：什么都不用做（插件按旧接口跑）")
+        info("  · 跟进新版：wb.py sync-app --force  （会先把旧 app 备份成 backups\\app-<ver>-<时间>）")
+        info("  · 回滚旧版：wb.py rollback")
+
+    head("插件声明的版本约束")
+    dirs = plugin_dirs()
+    if not dirs:
+        warn("没找到插件源码目录")
+        return 0
+    for d in dirs:
+        try:
+            data = json.loads((d / "package.json").read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            warn(f"{d.name}: package.json 解析失败 {exc}")
+            continue
+        peers = data.get("peerDependencies") or {}
+        dsh_peers = {k: v for k, v in peers.items() if "dsh" in k or k.startswith("@deepseek-ai")}
+        name = data.get("name", d.name)
+        ver = data.get("version", "?")
+        if dsh_peers:
+            info(f"{name} {ver}  约束: " + ", ".join(f"{k}@{v}" for k, v in dsh_peers.items()))
+        else:
+            info(f"{name} {ver}  没有声明 dsh peer 版本约束（升级时靠人工验证）")
+
+    live = STATE_DIR / "api-live.json"
+    if live.exists():
+        try:
+            p = json.loads(live.read_text(encoding="utf-8"))
+            info(f"活体快照版本 {p.get('version')}（不一致说明需要重新采集：wb.py api）")
+        except Exception:
+            pass
+    return 0
+
+
 def cmd_sync_app(force: bool = False) -> int:
     head("同步安装到工作台")
     if (APP_EXE.exists()) and not force:
@@ -220,9 +283,20 @@ def cmd_sync_app(force: bool = False) -> int:
     if not MAIN_INSTALL.exists():
         bad(f"主安装不存在：{MAIN_INSTALL}")
         return 1
+    was_running = bool(listening_pids(WB_PORT))
     if APP_ROOT.exists():
-        info("清理旧副本…")
-        shutil.rmtree(APP_ROOT, ignore_errors=True)
+        # 先停掉在跑的工作台，再把旧安装改名备份（秒级完成、可回滚；不复制 1.7GB）
+        if was_running:
+            cmd_stop()
+        bak_dir = WB_ROOT / "backups"
+        bak_dir.mkdir(parents=True, exist_ok=True)
+        bak = bak_dir / f"app-{app_version()}-{time.strftime('%Y%m%d-%H%M%S')}"
+        try:
+            APP_ROOT.rename(bak)
+            ok(f"旧安装已备份 → {bak}")
+        except Exception:
+            warn("改名备份失败，退回直接删除旧副本")
+            shutil.rmtree(APP_ROOT, ignore_errors=True)
     info("复制中（约 1.7GB，请稍等）…")
     started = time.time()
     rc = subprocess.run(
@@ -236,6 +310,38 @@ def cmd_sync_app(force: bool = False) -> int:
     ok(f"完成：{files} 文件 / {size / 1048576:.0f} MB，用时 {time.time() - started:.0f}s")
     ok(f"exe:   {APP_EXE}")
     ok(f"cli:   {APP_DSH_CMD}")
+    ok(f"版本:  {app_version()}")
+    if was_running:
+        info("之前工作台在跑，重新拉起…")
+        cmd_start(True)
+    return 0
+
+
+def cmd_rollback() -> int:
+    """把安装回滚到 backups 里最近的一份旧安装。"""
+    head("回滚工作台安装")
+    bak_dir = WB_ROOT / "backups"
+    baks = sorted([p for p in bak_dir.glob("app-*") if p.is_dir()]) if bak_dir.exists() else []
+    if not baks:
+        bad("没有可回滚的备份（backups\\app-*）")
+        return 1
+    info("可用备份：")
+    for b in baks:
+        info(f"  {b.name}")
+    target = baks[-1]
+    was_running = bool(listening_pids(WB_PORT))
+    if was_running:
+        cmd_stop()
+    cur = bak_dir / f"app-{app_version()}-{time.strftime('%Y%m%d-%H%M%S')}"
+    try:
+        APP_ROOT.rename(cur)
+        ok(f"当前安装另存 → {cur}")
+    except Exception:
+        shutil.rmtree(APP_ROOT, ignore_errors=True)
+    target.rename(APP_ROOT)
+    ok(f"已回滚到 → {target.name}（现在版本 {app_version()}）")
+    if was_running:
+        cmd_start(True)
     return 0
 
 
@@ -654,6 +760,8 @@ def main(argv: list[str]) -> int:
         "status": lambda: cmd_status(),
         "watch": lambda: cmd_watch(),
         "api": lambda: cmd_api(),
+        "compat": lambda: cmd_compat(),
+        "rollback": lambda: cmd_rollback(),
         "sync-app": lambda: cmd_sync_app(args.force),
         "start": lambda: cmd_start(args.with_watchdog),
         "stop": lambda: cmd_stop(),
