@@ -266,6 +266,24 @@ def bench_profile_json() -> Path:
     return WB_HOME / "profiles" / WB_PROFILE / "package.json"
 
 
+def npm_latest_version(pkg: str) -> str:
+    """查 npm 上的最新版本（先官方源，失败再腾讯镜像）。"""
+    npm = Path(r"E:\nodejs\npm.cmd")
+    if not npm.exists():
+        return ""
+    for reg in ("https://registry.npmjs.org/", "https://mirrors.cloud.tencent.com/npm/"):
+        try:
+            out = subprocess.run(["cmd", "/c", f'"{npm}"', "view", pkg, "version", "--registry", reg],
+                                 capture_output=True, text=True, timeout=120, creationflags=RUNFLAGS,
+                                 encoding="utf-8", errors="replace").stdout.strip()
+            last = [ln.strip() for ln in out.splitlines() if ln.strip()]
+            if last and re.match(r"^\d+\.\d+\.\d+", last[-1]):
+                return last[-1]
+        except Exception:
+            continue
+    return ""
+
+
 def cmd_plugins(action: str = "list", spec: str = "", bundle: str = "") -> int:
     """工作台插件管理：list / install / add。"""
     pkg_path = bench_profile_json()
@@ -312,7 +330,16 @@ def cmd_plugins(action: str = "list", spec: str = "", bundle: str = "") -> int:
             deps[name] = "link:" + src.as_posix()
         else:
             name = name or spec
-            deps[name] = spec
+            # 依赖值必须是版本/标签：裸包名先查 npm 拿确切版本，查不到就退 latest
+            tail = spec.split("/")[-1]
+            if re.search(r"[@^~><=*]", tail) or spec.startswith(("file:", "link:", "github:", "http")):
+                value = spec
+            else:
+                ver = npm_latest_version(spec)
+                value = ver or "latest"
+                if ver:
+                    ok(f"npm 最新版本：{spec}@{ver}")
+            deps[name] = value
         if name not in bundles:
             bundles.append(name)
         pkg_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

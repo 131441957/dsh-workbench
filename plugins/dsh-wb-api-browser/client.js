@@ -6,6 +6,7 @@ window.__ModuleLoader__.load({
     const { useState, useEffect, useMemo } = React
 
     const TABS = [
+      { id: 'plugins', label: '插件' },
       { id: 'services', label: '宿主服务' },
       { id: 'slots', label: '前端槽位' },
       { id: 'build', label: 'profile 分层' },
@@ -92,10 +93,11 @@ window.__ModuleLoader__.load({
     }
 
     function Panel() {
-      const [tab, setTab] = useState('services')
+      const [tab, setTab] = useState('plugins')
       const [live, setLive] = useState(null)
       const [build, setBuild] = useState(null)
       const [status, setStatus] = useState(null)
+      const [plugins, setPlugins] = useState(null)
       const [error, setError] = useState('')
       const [query, setQuery] = useState('')
       const [expanded, setExpanded] = useState('')
@@ -104,15 +106,17 @@ window.__ModuleLoader__.load({
         let alive = true
         ;(async () => {
           try {
-            const [l, b, s] = await Promise.all([
+            const [l, b, s, p] = await Promise.all([
               getJson('/wb-api/live').catch(() => null),
               getJson('/wb-api/build').catch(() => null),
               getJson('/wb-api/status').catch(() => null),
+              getJson('/wb-api/plugins').catch(() => null),
             ])
             if (!alive) return
             setLive(l)
             setBuild(b)
             setStatus(s)
+            setPlugins(p)
             if (!l && !b && !s) setError('工作台还没有基线数据：先跑 wb.py api')
           } catch (e) {
             if (alive) setError(String(e && e.message ? e.message : e))
@@ -126,6 +130,22 @@ window.__ModuleLoader__.load({
       const needle = query.trim().toLowerCase()
 
       const rows = useMemo(() => {
+        if (tab === 'plugins') {
+          const list = (plugins && plugins.plugins) || []
+          return list
+            .filter((p) => !needle || p.name.toLowerCase().includes(needle))
+            .map((p) => ({
+              id: `plugin:${p.name}`,
+              head: p.name,
+              meta: [
+                p.version ? `v${p.version}` : '无版本',
+                p.inBundles ? '已登记' : '未登记',
+                p.linked ? '已链接' : '缺 node_modules',
+              ].join(' · '),
+              body: `依赖声明: ${p.spec}`,
+              extra: !p.inBundles || !p.linked ? '⚠️ 这条不会生效：' + (!p.inBundles ? '没加进 bundles；' : '') + (!p.linked ? 'node_modules 里找不到；' : '') : '',
+            }))
+        }
         if (tab === 'services') {
           const list = (live && live.services) || []
           return list
@@ -168,6 +188,7 @@ window.__ModuleLoader__.load({
       }, [tab, live, build, status, needle])
 
       const counts = {
+        plugins: (plugins && plugins.plugins && plugins.plugins.length) || 0,
         services: (live && live.counts && live.counts.services) || 0,
         slots: (live && live.counts && live.counts.slots) || 0,
         build: (build && build.totals && build.totals.rows) || 0,
@@ -228,7 +249,7 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { style: styles.dim },
-            `服务 ${counts.services} · 槽位 ${counts.slots} · profile 行 ${counts.build}（数据来自 state/api-live.json 与 api-build.json）`,
+            `插件 ${counts.plugins} · 服务 ${counts.services} · 槽位 ${counts.slots} · profile 行 ${counts.build}`,
           ),
         ),
       )

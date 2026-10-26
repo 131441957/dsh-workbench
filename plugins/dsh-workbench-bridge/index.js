@@ -39,6 +39,33 @@ async function probe() {
   }
 }
 
+/** 直接读工作台的 profile 清单：工作台挂了也能回答“装了哪些插件”。 */
+async function readBenchPlugins() {
+  const profileDir = join(WB_ROOT, 'home', 'profiles', 'bench')
+  let pkg
+  try {
+    pkg = JSON.parse(await readFile(join(profileDir, 'package.json'), 'utf8'))
+  } catch (error) {
+    return { profileDir, error: `读不到 profile：${String(error)}`, plugins: [] }
+  }
+  const deps = pkg.dependencies || {}
+  const bundles = (pkg.dsh && pkg.dsh.profile && pkg.dsh.profile.bundles) || []
+  const plugins = []
+  for (const [name, spec] of Object.entries(deps)) {
+    let linked = false
+    let version = null
+    try {
+      const meta = JSON.parse(await readFile(join(profileDir, 'node_modules', name, 'package.json'), 'utf8'))
+      linked = true
+      version = meta.version || null
+    } catch {
+      linked = false
+    }
+    plugins.push({ name, spec, linked, version, inBundles: bundles.includes(name) })
+  }
+  return { profileDir, bundles, plugins }
+}
+
 async function statusPayload() {
   const [live, build, mainStatus, health] = await Promise.all([
     readState('api-live.json'),
@@ -77,6 +104,10 @@ export function apply(ctx) {
       }
       if (url.pathname === `${PREFIX}/status`) {
         sendJson(res, 200, await statusPayload())
+        return
+      }
+      if (url.pathname === `${PREFIX}/plugins`) {
+        sendJson(res, 200, await readBenchPlugins())
         return
       }
       sendJson(res, 404, { error: 'unknown endpoint' })
@@ -182,9 +213,37 @@ export function apply(ctx) {
       },
     }
 
+    const pluginsTool = {
+      name: 'workbench_plugins',
+      description: '列出工作台 profile 里登记/链接的插件（工作台挂了也能查，因为直接读磁盘清单）。',
+      parameters: { type: 'object', additionalProperties: false, properties: {} },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          required: ['count', 'items'],
+          properties: {
+            count: { type: 'number' },
+            items: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          },
+        },
+        render: (_args, value) => [
+          { type: 'text', text: `工作台插件 ${value.count} 个\n` + value.items.map((p) => `· ${p.name}${p.version ? ' v' + p.version : ''}${p.inBundles ? '' : '（未登记）'}${p.linked ? '' : '（未链接）'}`).join('\n') },
+        ],
+      },
+      async execute() {
+        const data = await readBenchPlugins()
+        return { count: (data.plugins || []).length, items: data.plugins || [] }
+      },
+      presentCall() {
+        return { card: 'generic', title: 'workbench_plugins', kind: 'read' }
+      },
+    }
+
     ctx.effect(() => tools.register(statusTool))
     ctx.effect(() => tools.register(apiTool))
-    ctx.logger?.info?.('wb-bridge: tools workbench_status / workbench_api ready')
+    ctx.effect(() => tools.register(pluginsTool))
+    ctx.logger?.info?.('wb-bridge: tools workbench_status / workbench_api / workbench_plugins ready')
   } else {
     ctx.logger?.warn?.('wb-bridge: tools service unavailable')
   }
