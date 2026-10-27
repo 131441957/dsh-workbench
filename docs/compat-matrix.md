@@ -75,5 +75,8 @@ python tools\wb.py sync-bed "E:\WB-<版本>"     # 只比对内容，幂等；�
 - **0.2.1-rc.3 把「设置」收进了「更多」菜单**：顶栏因此显示「更多」而不是「设置」——这是如实反映该版本界面，不是故障。
 - 因此**藏原版侧栏不能只靠「设置」按钮当锚点**（rc.3 没有这个按钮，会让原版左栏整条露出来）。现在 `ui\workbench.js` 的 `findSidebarChain()` 在找不到「设置」时退回“任意一个 `*_panelRow`”当锚点；`boot-diag.json` 新增 `sidebarVisibleRows` 字段（0 = 藏干净），换版本时先看这个数字。
 - 床要 `--no-watchdog` 起（看门狗跟踪的是主驾**当次**启动的监听 pid，主驾一重启就把床关掉）。
+- **给床跑安装时一律带 `-NoShortcuts`**（或环境变量 `DSH_WB_NO_SHORTCUTS=1`）：否则会把桌面
+  「DSH 工作台」和开机自启改成指向这个临时副本，删掉副本就变死链（2026-10-27 踩过）。
+  死链了可以用 `python tools\wb.py shortcuts` 一条命令指回主套。
 - 两套工作台可以同时开：它们都是 headless（`dsh.cmd` node 模式），不占 Electron 单实例锁、不用 `%APPDATA%` 的 cookie profile。
 - 床与主套共享的只有主 harness home 的**只读**用途（同步 `.credentials.yaml`、读 `storages\workspace.json`）。

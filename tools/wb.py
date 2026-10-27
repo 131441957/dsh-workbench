@@ -2617,9 +2617,26 @@ def cmd_resume() -> int:
     return 1
 
 
-def make_shortcuts() -> None:
-    """桌面「仅打开页面」+ 启动项「自动伴随」两个快捷方式（幂等，重复执行无副作用）。"""
-    if os.environ.get("DSH_WB_NO_SHORTCUTS"):
+# ── 快捷方式修复：把桌面/启动项指回**当前这个根** ─────────────────────────────
+# 场景：在多套工作台之间折腾（例如给测试床跑 install）会把宿主的快捷方式改指向测试目录，
+# 测完删掉目录就变成死链。这条命令用来一条命令修回来。
+def cmd_shortcuts() -> int:
+    head("重建快捷方式（指向当前根）")
+    ok(f"根目录 {WB_ROOT}")
+    make_shortcuts(force=True)
+    desk = Path(os.environ.get("USERPROFILE", r"C:\Users\Administrator")) / "Desktop"
+    for name in ("DSH 工作台.lnk", "DSH 工作台 安装器.lnk"):
+        p = desk / name
+        (ok if p.exists() else warn)(f"桌面 {name}：{'存在' if p.exists() else '没生成'}")
+    return 0
+
+
+def make_shortcuts(force: bool = False) -> None:
+    """桌面「仅打开页面」+ 启动项「自动伴随」两个快捷方式（幂等，重复执行无副作用）。
+
+    force=True 时忽略 DSH_WB_NO_SHORTCUTS（给 `wb.py shortcuts` 修复死链用）。
+    """
+    if os.environ.get("DSH_WB_NO_SHORTCUTS") and not force:
         # 演练/CI/客户机批量部署时用：别去动用户桌面与开机启动项
         info("跳过快捷方式（DSH_WB_NO_SHORTCUTS=1）")
         return
@@ -3834,6 +3851,7 @@ def main(argv: list[str]) -> int:
         "plugin-update": lambda: cmd_plugin_update(
             (args.rest[0] if args.rest else (args.sub or "")), args.apply),
         "logs": lambda: cmd_logs(args.n),
+        "shortcuts": lambda: cmd_shortcuts(),
         "watchdog": lambda: cmd_watchdog([int(x) for x in args.main_pids.split(",") if x.strip()]),
     }
     if args.command not in table:

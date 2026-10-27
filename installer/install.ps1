@@ -16,7 +16,8 @@ param(
   [switch]$DryRun,
   [switch]$NoAttach,
   [switch]$OpenPage,
-  [switch]$NoPause
+  [switch]$NoPause,
+  [switch]$NoShortcuts
 )
 
 $ErrorActionPreference = 'Stop'
@@ -53,6 +54,13 @@ if (-not (Test-Path $wb)) {
 $args = @($wb, 'setup', '--yes')
 if ($NoAttach) { $args += '--no-attach' }
 if ($OpenPage -and -not $DryRun) { $args += '--open' }
+
+# 演练副本（不是常驻安装）请加 -NoShortcuts：否则会把桌面「DSH 工作台」和开机自启
+# 改成指向这个副本，回头删掉副本就变死链（2026-10-27 踩过）。
+if ($NoShortcuts) {
+  $env:DSH_WB_NO_SHORTCUTS = '1'
+  Write-Host "[i] 不改桌面快捷方式与开机自启（-NoShortcuts）" -ForegroundColor DarkGray
+}
 
 if ($DryRun) {
   Write-Host ""
