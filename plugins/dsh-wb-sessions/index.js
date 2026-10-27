@@ -171,7 +171,11 @@ let cache = { port: 0, token: '', at: 0 }
 async function resolveMain() {
   if (cache.port && cache.token && Date.now() - cache.at < 15000) return cache
   const status = await readJson('main-status.json')
-  const ports = (status?.mainHarness?.ports ?? []).filter((p) => Number.isInteger(p) && p !== 59430)
+  // 排除**自己这一套**的端口，而不是写死 59430：
+  // 测试床跑在 59480，主套跑在 59430；写死会让床永远连错/连不上（2026-10-27 修）。
+  const cfg = await readJson('config.json')
+  const ownPort = Number.isInteger(cfg?.port) ? cfg.port : (Number(process.env.DSH_WORKBENCH_PORT) || 59430)
+  const ports = (status?.mainHarness?.ports ?? []).filter((p) => Number.isInteger(p) && p !== ownPort)
   let token = ''
   try {
     token = (await readFile(join(STATE, 'bridge-token.txt'), 'utf8')).trim()

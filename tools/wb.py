@@ -289,10 +289,13 @@ def load_paths(redetect: bool = False, install: str | None = None, home: str | N
         changed = True
     else:
         cfg_home = Path(cfg.get("home") or "")
-        # 显式指定过的 home（哪怕还是空目录）不许被环境变量顶掉——多套工作台共存时
-        # 这条一旦失守，第二套会静默用上主 home。
-        explicit_home = cfg.get("homeSource") == "手动指定" and cfg_home.is_dir() and str(cfg_home) not in ("", ".")
-        if redetect or not cfg.get("home") or not (valid_home(cfg_home) or explicit_home):
+        # **配置里已经记着的 home 只要目录存在就不许被环境变量顶掉**（2026-10-27 修）：
+        # 之前只认 homeSource == "手动指定"，而来源标签会因为一次环境探测变成
+        # "DSH_HOME 环境变量"，之后每次跑命令都会被环境里的主驾 home 覆盖——
+        # 测试床的 config 就这么被写成了 E:\DSH\home（差点让床连到主驾 home）。
+        # 现在：有明确记录且目录在 → 信任；要改必须显式 --home 或 --redetect。
+        cfg_home_usable = cfg_home.is_dir() and str(cfg_home) not in ("", ".")
+        if redetect or not cfg.get("home") or not (valid_home(cfg_home) or cfg_home_usable):
             found, why = detect_home(MAIN_INSTALL if valid_install(MAIN_INSTALL) else None)
             if found:
                 MAIN_HOME = found
