@@ -1501,6 +1501,122 @@ python tools\\wb.py fix-ui                        # 从别处装的插件，跑�
     return 0
 
 
+def _git(args: list[str]) -> str:
+    try:
+        proc = subprocess.run(["git", *args], cwd=str(WB_ROOT), capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=120, creationflags=RUNFLAGS)
+        return (proc.stdout or "") + (proc.stderr or "")
+    except Exception as exc:  # noqa: BLE001
+        return f"__ERR__ {exc}"
+
+
+def cmd_prepublish() -> int:
+    """公开仓库前自检：第三方代码、密钥、本机路径、体积、许可。
+
+    `ref/` 里是官方 bundle 反解出来的源码与第三方插件源码——**只允许留在私有库里**。
+    """
+    head("公开前自检（publish checklist）")
+    fails: list[str] = []
+    warns: list[str] = []
+
+    tracked = [ln.strip() for ln in _git(["ls-files"]).splitlines() if ln.strip()]
+    if tracked and not tracked[0].startswith("__ERR__"):
+        info(f"已跟踪文件：{len(tracked)} 个")
+    else:
+        bad("读不到 git 跟踪列表（这里不是 git 仓库？）")
+        return 1
+
+    # ① ref/ 是否还在 HEAD
+    ref_tracked = [t for t in tracked if t.startswith("ref/")]
+    if ref_tracked:
+        fails.append(f"HEAD 里还有 {len(ref_tracked)} 个 ref/ 文件（第三方/官方反解源码）")
+    else:
+        ok("HEAD 里没有 ref/（第三方与官方反解源码已移出）")
+
+    # ② 历史里是否还有 ref/
+    hist = _git(["log", "--all", "--name-only", "--pretty=format:", "--", "ref"])
+    hist_files = {ln.strip() for ln in hist.splitlines() if ln.strip().startswith("ref/")}
+    if hist_files:
+        warns.append(f"**历史提交**里仍有 {len(hist_files)} 个 ref/ 文件 —— 公开前要么重写历史摘掉，要么确认授权")
+    else:
+        ok("历史里也没有 ref/")
+
+    # ③ 密钥/凭据
+    secret_pat = re.compile(r"(gho_[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}"
+                            r"|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----)")
+    hits = []
+    for rel in tracked:
+        p = WB_ROOT / rel
+        if not p.is_file() or p.stat().st_size > 2 * 1024 * 1024:
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        for m in secret_pat.finditer(text):
+            hits.append(f"{rel}: {m.group(0)[:12]}…")
+    if hits:
+        fails.append(f"疑似密钥 {len(hits)} 处：" + "; ".join(hits[:5]))
+    else:
+        ok("已跟踪文件里没有疑似密钥")
+
+    # ④ 本机绝对路径
+    marker = "E:" + chr(92) + "DSH-WORKBENCH"
+    abs_hits = []
+    for rel in tracked:
+        p = WB_ROOT / rel
+        if not p.is_file() or p.stat().st_size > 2 * 1024 * 1024:
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        n = text.count(marker)
+        if n:
+            abs_hits.append(f"{rel}({n})")
+    if abs_hits:
+        warns.append(f"本机绝对路径 {sum(int(x.split('(')[1].rstrip(')')) for x in abs_hits)} 处：" + ", ".join(abs_hits[:6]))
+    else:
+        ok("已跟踪文件里没有本机绝对路径")
+
+    # ⑤ 不该进仓库的大目录
+    for bad_dir in ("dist", "app", "home", "state", "backups", "attic"):
+        if any(t.startswith(bad_dir + "/") for t in tracked):
+            fails.append(f"{bad_dir}/ 里还有文件被 git 跟踪")
+    if not any(f.startswith(tuple(f"{d}/" for d in ("dist", "app", "home", "state", "backups", "attic"))) for f in fails):
+        ok("dist/ app/ home/ state/ backups/ attic/ 都没进 git")
+
+    # ⑥ 体积
+    big = []
+    for rel in tracked:
+        p = WB_ROOT / rel
+        if p.is_file() and p.stat().st_size > 1024 * 1024:
+            big.append(f"{rel} {p.stat().st_size // 1024} KB")
+    if big:
+        warns.append("有超过 1MB 的文件：" + ", ".join(big[:5]))
+    else:
+        ok("没有超过 1MB 的已跟踪文件")
+
+    # ⑦ 许可
+    if not any(t.upper().startswith("LICENSE") for t in tracked):
+        warns.append("没有 LICENSE 文件（公开前决定许可协议）")
+
+    # ⑧ 测试插件痕迹（文档里提到没问题，但别进分发包）
+    if "plugins/dshmarket" in " ".join(tracked):
+        fails.append("仓库里跟踪了 dshmarket（测试插件）")
+
+    head("结论")
+    for w in warns:
+        warn(w)
+    for f in fails:
+        bad(f)
+    if fails:
+        bad(f"不能公开：{len(fails)} 项必须先处理（清单见 docs\\publish-checklist.md）")
+        return 1
+    ok("硬性检查全过" + ("（还有 {} 条提醒，公开前过一眼）".format(len(warns)) if warns else ""))
+    return 0
+
+
 def current_url() -> str | None:
     """取最新的带 token 入口（token 每次重启都换）。"""
     log = LOG_DIR / "workbench.out.log"
@@ -2888,6 +3004,7 @@ def main(argv: list[str]) -> int:
         "attach": lambda: cmd_attach(args.target_home, args.target_profile, args.apply, args.no_install),
         "detach": lambda: cmd_detach(args.target_home, args.target_profile, args.apply, args.no_install),
         "pack": lambda: cmd_pack(args.out or "", args.include_test, args.force),
+        "prepublish": lambda: cmd_prepublish(),
         "url": lambda: cmd_url(),
         "open": lambda: cmd_open(),
         "page": lambda: cmd_page(),
