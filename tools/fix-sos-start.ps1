@@ -24,7 +24,7 @@ param(
   [switch]$CleanCookies,
   [switch]$WhatIf,
   [int]$KeepNewest = 5,
-  [string]$SosHome = 'E:\SOS-home'
+  [string]$SosHome = "$env:USERPROFILE\SOS-home"
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,7 +34,7 @@ $profileBackup = Join-Path $appdata 'dsh-desktop.main-backup'
 $sosProfileLeft = Join-Path $appdata 'dsh-desktop.rc3'
 $cookieDb = Join-Path $profileDir 'Network\Cookies'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$backupRoot = 'E:\DSH-WORKBENCH\backups'
+$backupRoot = Join-Path (Split-Path $PSScriptRoot -Parent) 'backups'
 
 function Show-Status {
   Write-Host "== 现状 ==" -ForegroundColor Cyan
