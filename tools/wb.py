@@ -2007,6 +2007,48 @@ def cmd_preflight(install: str) -> int:
     return 0
 
 
+def cmd_sync_bed(target: str) -> int:
+    """把当前开发态的 code（tools/plugins/ui/seeds/config.template.json）同步到另一套工作台根目录。
+
+    测试床最大的坑是漂移：床里的代码是手工 copy 的，改完主套不同步，测出来的结论就不算数。
+    """
+    head("同步代码到测试床")
+    if not target:
+        bad("用法：wb.py sync-bed <目标根目录>")
+        return 2
+    dst_root = Path(target).resolve()
+    if not dst_root.is_dir() or dst_root.resolve() == WB_ROOT.resolve():
+        bad(f"目标不合法：{dst_root}")
+        return 2
+    if not (dst_root / "tools" / "wb.py").exists():
+        bad(f"{dst_root} 看起来不是工作台根目录（缺 tools\\wb.py）")
+        return 2
+    ok(f"源 {WB_ROOT} → 目标 {dst_root}")
+    copied = 0
+    for sub in ("tools", "plugins", "ui", "seeds"):
+        src_dir = WB_ROOT / sub
+        if not src_dir.is_dir():
+            continue
+        for item in src_dir.rglob("*"):
+            if item.is_dir() or item.suffix in (".pyc",):
+                continue
+            if "__pycache__" in item.parts:
+                continue
+            rel = item.relative_to(WB_ROOT)
+            out = dst_root / rel
+            if out.exists() and out.stat().st_size == item.stat().st_size and out.read_bytes() == item.read_bytes():
+                continue
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(item.read_bytes())
+            copied += 1
+    tpl = WB_ROOT / "config.template.json"
+    if tpl.exists():
+        (dst_root / "config.template.json").write_bytes(tpl.read_bytes())
+    ok(f"已同步 {copied} 个变更文件（{WB_ROOT.name} → {dst_root.name}）")
+    info("宿主侧插件代码改过的话，测试床要重启才生效：到该目录跑 wb.py restart-safe")
+    return 0
+
+
 def current_url() -> str | None:
     """取最新的带 token 入口（token 每次重启都换）。"""
     log = LOG_DIR / "workbench.out.log"
@@ -2369,6 +2411,12 @@ def cmd_install(force: bool = False) -> int:
     for name in ("app", "home", "plugins", "ui", "state", "logs", "seeds", "docs", "backups", "tools"):
         (WB_ROOT / name).mkdir(parents=True, exist_ok=True)
     ok("目录结构就绪")
+
+    # 门禁：目标 harness 版本如果不满足要求，装了也是白页 → 先拦下来（--force 可越过）
+    if not force:
+        if cmd_preflight(str(MAIN_INSTALL)) != 0:
+            bad("目标 harness 版本不满足要求，安装中止（确要试装加 --force）")
+            return 1
 
     if force or not APP_DSH_CMD.exists():
         if cmd_sync_app(force) != 0:
@@ -3475,6 +3523,7 @@ def main(argv: list[str]) -> int:
         "start-safe": lambda: cmd_start_safe(),
         "registry": lambda: cmd_registry(args.force),
         "preflight": lambda: cmd_preflight(args.install or ""),
+        "sync-bed": lambda: cmd_sync_bed(args.out or (args.rest[0] if args.rest else (args.sub or ""))),
         "plugin-search": lambda: cmd_plugin_search(
             (args.rest[0] if args.rest else (args.sub or "")), args.n),
         "plugin-update": lambda: cmd_plugin_update(
