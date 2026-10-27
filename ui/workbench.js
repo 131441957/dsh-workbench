@@ -300,6 +300,35 @@
   // 不至于坏，但顶栏会多出按钮，见到就补一行。
   const BUILTIN_SETTINGS_NAV = ['通用设置', '模型', '内置插件', 'Agent 预设', '权限', '语言', '外观', '字号大小']
 
+  // 把"插件设置分区"写回服务端（落进 state\ui-config.json）。
+  // 必须重试：工作台刚重启那几秒 /wb-ui/config 的 POST 可能还没挂上（405/404），
+  // 只发一次就丢，表现是"点一次死按钮消失，刷新又回来"（2026-10-27 踩过）。
+  const postSections = (sections, replace, attempt = 0) => {
+    fetch('/wb-ui/config', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sections, replace: Boolean(replace) }),
+    })
+      .then((res) => { if (!res.ok) throw new Error(String(res.status)) })
+      .catch(() => { if (attempt < 3) setTimeout(() => postSections(sections, replace, attempt + 1), 2000) })
+  }
+
+  // 目录对账：设置页里**实际存在**的分区才是有效的。插件被卸载后，它留在
+  // state\ui-config.json 里的标题会变成"点不开的死按钮"（2026-10-27 卸 dsh-pet 时出现）。
+  // 这里在每次打开设置、拿到真实标题列表后，把不存在的从白名单里剔掉并落盘。
+  const reconcileSettingsSections = (titles) => {
+    const cfg = state.uiConfig
+    if (!cfg || !Array.isArray(cfg.extra)) return
+    if (!titles || titles.length < 2) return   // 设置还没渲染全时别乱删
+    const stale = cfg.extra.filter((t) => !titles.includes(t))
+    if (!stale.length) return
+    cfg.extra = cfg.extra.filter((t) => titles.includes(t))
+    cfg.keepNav = (cfg.keepNav || []).filter((t) => titles.includes(t) || BUILTIN_SETTINGS_NAV.includes(t))
+    refreshTopbar()
+    postSections(cfg.extra, true)
+    state.reconciled = (state.reconciled || []).concat(stale)
+  }
+
   // 客户端自动发现：设置页左侧导航里出现、但不在内置名单里的分区 = 插件加的分区
   // → 立刻当成顶栏入口（这样装带设置分区的插件**不需要任何注册**，
   //   也不需要 wb.py 去猜标题；2026-10-27 之前靠 install-plugin 写 ui-config，猜不到就丢）。
@@ -314,18 +343,13 @@
       if (!cfg.extra.includes(t)) { cfg.extra.push(t); changed = true }
       if (!cfg.keepNav.includes(t)) cfg.keepNav.push(t)
     }
+    reconcileSettingsSections(titles)
     if (changed) {
       refreshTopbar()
       // 落盘：下次打开页面**不用再先点一次设置**也能有这个顶栏按钮。
       // 服务端只是往 keepNav 里加标题（POST /wb-ui/config），失败也无所谓——
       // 下次打开设置时会再发现一次。
-      try {
-        fetch('/wb-ui/config', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ sections: cfg.extra }),
-        }).catch(() => {})
-      } catch { /* 忽略 */ }
+      postSections(cfg.extra, false)
     }
     return titles
   }
@@ -425,6 +449,16 @@
         return
       }
       if (attempt < 10) setTimeout(() => step(attempt + 1), 150)
+      else {
+        // 分区已经不在了（插件被卸载）→ 把这个死按钮从顶栏拿掉，别让用户点到空气
+        const cfg = state.uiConfig
+        if (cfg && Array.isArray(cfg.extra) && cfg.extra.includes(title)) {
+          cfg.extra = cfg.extra.filter((t) => t !== title)
+          refreshTopbar()
+          postSections(cfg.extra, true)
+        }
+        state.selftestInfo = { attempt, hasOverlay: Boolean(overlay), pool: pool.length, title, missing: true }
+      }
     }
     setTimeout(() => step(0), 200)
   }

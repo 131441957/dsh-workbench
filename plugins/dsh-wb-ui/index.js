@@ -167,17 +167,25 @@ export function apply(ctx) {
         } catch { /* 读失败就当空报告 */ }
         const raw = Buffer.concat(chunks).toString('utf8')
         let incoming = []
+        let parsed = {}
         try {
-          const parsed = JSON.parse(raw || '{}')
+          parsed = JSON.parse(raw || '{}')
           incoming = Array.isArray(parsed.sections) ? parsed.sections : []
-        } catch { incoming = [] }
+        } catch { incoming = []; parsed = {} }
         const clean = [...new Set(incoming.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim()))]
-        const keepNav = Array.isArray(cfg.keepNav) ? cfg.keepNav.slice() : []
+        // replace=true：整份替换（页面发现某分区已不存在时用来清掉死标题）；
+        // 默认"只增不减"，避免页面在设置还没渲染全时误删插件分区。
+        const repl = Boolean(parsed.replace)
+        let keepNav = Array.isArray(cfg.keepNav) ? cfg.keepNav.slice() : []
         let added = 0
-        for (const t of clean) {
-          if (!keepNav.includes(t)) { keepNav.push(t); added += 1 }
+        if (repl) {
+          keepNav = clean
+        } else {
+          for (const t of clean) {
+            if (!keepNav.includes(t)) { keepNav.push(t); added += 1 }
+          }
         }
-        if (added) {
+        if (repl || added) {
           cfg.keepNav = keepNav
           try {
             // 先写 .tmp 再 rename：半个 JSON 会让界面下次读配置直接崩溃
