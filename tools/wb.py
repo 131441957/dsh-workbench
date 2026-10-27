@@ -503,10 +503,10 @@ def cmd_plugins(action: str = "list", spec: str = "", bundle: str = "") -> int:
             bad("用法：wb.py plugins add <插件目录或包名> [--bundle 名字]")
             return 2
         src = Path(spec)
+        name = bundle
         if src.exists() and (src / "package.json").exists():
             # 必须写绝对路径：link: 是相对 profile 目录解析的，写相对路径会指向不存在的目录
             src = src.resolve()
-            name = bundle
             meta = json.loads((src / "package.json").read_text(encoding="utf-8"))
             name = name or meta.get("name", src.name)
             deps[name] = "link:" + src.as_posix()

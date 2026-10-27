@@ -37,14 +37,21 @@
   flex: 0 0 auto !important;
 }
 
-/* ⑥ 设置页：只留「语言 / 外观 / 字号大小」，导航列与多余动作整列隐藏
-   （字段级由 workbench.js 按标题文字裁剪；导航会被 React 重渲染，所以用 CSS 压）
-   ⚠️ 不要给 .ZCYAFq_panel 加 left/transform 居中——它不是绝对定位，
-      transform 会把整块面板平移到屏幕外，表现就是“设置里什么都看不到”。 */
-.ZCYAFq_nav,
+/* ⑥ 设置页：字段级由 workbench.js 按标题裁剪；导航列**保留**（只压缩宽度），
+   分区白名单走 KEEP_NAV —— 插件在设置里加的分区要靠它才能点进去
+   （dshmarket 的「插件市场」曾因此完全不可达）。
+   ⚠️ 不要把 .ZCYAFq_nav 整列 display:none：那样所有插件的设置分区都会消失。
+   ⚠️ 也不要给 .ZCYAFq_panel 加 left/transform 居中——它不是绝对定位，
+      transform 会把整块面板平移到屏幕外，表现就是"设置里什么都看不到"。 */
 .ZCYAFq_navTitle,
 .ZCYAFq_actions {
   display: none !important;
+}
+
+.ZCYAFq_nav {
+  flex: 0 0 auto !important;
+  min-width: 110px !important;
+  max-width: 150px !important;
 }
 
 /* ────────────────────────────────────────────────────────────────
