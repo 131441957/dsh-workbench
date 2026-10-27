@@ -14,6 +14,13 @@
 一套**独立于主 harness** 的插件宿主：自己的 DSH 运行时副本、自己的 profile、自己的端口，
 插件与界面改造全在这里做，主 harness 只保留一个**软依赖**接入层，可随时摘掉。
 
+## 直接下载（不用自己打包）
+
+**[⬇ DSH-Workbench-v0.1.0.zip](https://github.com/131441957/dsh-workbench/releases/latest)**
+（约 170 KB，不含运行时——安装时会从你已装的 harness 复制一份）
+
+下载 → 解压 → 双击 `install.cmd` → 打开页面。三种装法见 [安装指南](docs/install-for-customer.md)。
+
 > 为什么做这个：改主 harness 的 webui 曾把它弄到无法修复。工作台把这类风险关进笼子——
 > 工作台炸了重装工作台，主驾不受影响。
 
