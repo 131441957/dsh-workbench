@@ -127,6 +127,38 @@
         selftestHit: state.selftestHit || null,
         settingsOpen: settingsNavVisible(),
         sidebarKept: Boolean(state.sidebarKept),
+        accountMenuVisible: Boolean(document.querySelector('[data-slot="settings.launcher"], [data-slot="sidebar.settings"]')),
+        accountHiddenBy: (() => {
+          const slot = document.querySelector('[data-slot="settings.launcher"], [data-slot="sidebar.settings"]')
+          let node = slot
+          for (let i = 0; i < 14 && node; i += 1) {
+            const cs = getComputedStyle(node)
+            if (cs.display === 'none' || cs.visibility === 'hidden') {
+              return { depth: i, cls: String(node.className || '').slice(0, 80), inline: node.getAttribute('style') || '' }
+            }
+            node = node.parentElement
+          }
+          return null
+        })(),
+        accountMenuRect: (() => {
+          // 注意：slot 本身常是 display:contents（0×0 是正常的），要量它**里面的按钮**
+          const slot = document.querySelector('[data-slot="settings.launcher"], [data-slot="sidebar.settings"]')
+          if (!slot) return null
+          const el = slot.querySelector('button, a, [role="button"]') || slot.closest('button, a, [role="button"]')
+          if (!el) return null
+          const r = el.getBoundingClientRect()
+          return { w: Math.round(r.width), h: Math.round(r.height), tag: el.tagName }
+        })(),
+        sidebarExtrasHidden: state.sidebarExtrasHidden || 0,
+        layoutWidths: (() => {
+          const side = bySuffix("sidebarCol")
+          const center = bySuffix("centerCol")
+          return {
+            sidebar: side ? Math.round(side.getBoundingClientRect().width) : null,
+            center: center ? Math.round(center.getBoundingClientRect().width) : null,
+            viewport: window.innerWidth,
+          }
+        })(),
         closeDebug: state.closeDebug || null,
         selftestInfo: state.selftestInfo || null,
         selftestRan: Boolean(state.selftestRan),
@@ -678,6 +710,39 @@
 
   // ── [F] 布局：把原侧栏藏掉 → 建顶栏 → 给 body 让出 46px ──────────────────
   // 只"藏"不禁用：禁用一个提供服务的插件（如 ui-workspace）会让整页 pending。
+  // 保留左栏的版本（rc.3）里，把左栏精简成"只剩底部的账号菜单（设置入口）"：
+  // 隐藏 新会话 / 原版插件入口 / 工作区（含默认工作区树），让界面尽量接近 alpha.1 的极简顶栏。
+  // 注意：这些只在**侧栏容器内部**隐藏，绝不碰顶栏与主区。
+  const hideSidebarExtras = () => {
+    const chain = findSidebarChain()
+    if (!chain.length) return 0
+    const texts = ['新会话', '工作区', '默认工作区', '插件']
+    // 账号菜单（设置入口）必须留着：它通常也包在 `*_panelRow` / footer 行里，
+    // 一律隐藏会把设置彻底弄没（2026-10-27 实测 rect 变成 0×0）。
+    const acct = document.querySelector('[data-slot="settings.launcher"], [data-slot="sidebar.settings"]')
+    let hidden = 0
+    for (const root of chain) {
+      for (const el of root.querySelectorAll('button, a, [role="button"], [role="treeitem"], [class*="_regionArea"], [class*="_newSession"]')) {
+        if (el.closest('#wb-topbar')) continue
+        if (el.classList.contains('wb-hidden')) continue
+        const text = textOf(el)
+        const isSessionBtn = el.matches('[class*="_newSession"]')
+        // *_panelRow 一律藏（顶栏已经承载这些入口）；其余按文字白名单（新会话 / 工作区 等）
+        const isPanelRow = el.matches('[class*="_panelRow"]')
+        if (!isSessionBtn && !isPanelRow && (!text || text.length > 16 || !texts.includes(text))) continue
+        // 行级容器：优先自身（这些元素本身就是行/区块）；否则往上找一行
+        const row = el.matches('button, a, [role="button"], [class*="_regionArea"], [class*="_newSession"]')
+          ? el
+          : (el.closest('[class*="_panelRow"]') || el)
+        if (acct && (row.contains(acct) || acct.contains(row) || row.closest('[class*="footer"]'))) continue
+        row.classList.add('wb-hidden')
+        hidden += 1
+      }
+    }
+    state.sidebarExtrasHidden = hidden
+    return hidden
+  }
+
   const placeTopbar = () => {
     // 整条侧栏链路都藏掉（只藏、不禁用插件——禁用一个提供服务的插件会让整页崩）。
     // 例外：keepSidebar 模式（设置入口只在左栏里的版本）→ 不藏，否则用户打不开设置。
@@ -693,6 +758,7 @@
       for (const el of document.querySelectorAll('.wb-hidden')) {
         if (!el.closest('#wb-topbar')) { el.classList.remove('wb-hidden'); el.style.removeProperty('display') }
       }
+      hideSidebarExtras()
     }
     refreshTopbar()
     reserveTopSpace()

@@ -44,9 +44,27 @@ body:not(.wb-keep-sidebar) [class*="_sidebarCol"] {
   display: none !important;
 }
 
-/* 1.1b 保留左栏时，顶栏仍然存在，所以左栏要往下让出顶栏高度 */
+/* 1.1b 保留左栏时（rc.3），左栏只留底部账号菜单（设置入口）：
+ *     隐藏品牌/标题文字，并把列收窄成一条窄栏 —— 看起来接近 alpha.1 的极简顶栏。 */
 body.wb-keep-sidebar [class*="_sidebarCol"] {
+  /* 只保留底部的账号菜单（设置入口），其余条目由 JS 隐藏。
+   * 收窄到 72px；账号按钮本身限宽并裁内容（不裁尺寸，否则会变 0×0 → 点不到）。 */
   padding-top: 8px !important;
+  width: 72px !important;
+  min-width: 72px !important;
+  max-width: 72px !important;
+  overflow: visible !important;
+}
+body.wb-keep-sidebar [data-slot="settings.launcher"] button,
+body.wb-keep-sidebar [class*="_triggerRow"] button {
+  max-width: 56px !important;
+  overflow: hidden !important;
+  padding: 4px !important;
+}
+body.wb-keep-sidebar [class*="_logoRow"],
+body.wb-keep-sidebar [class*="_brandIdentity"],
+body.wb-keep-sidebar [class*="_regionArea"] {
+  display: none !important;
 }
 
 /* 1.2 frame 可能是 grid（固定列宽 280px），强制 flex 让中列能伸展 */
