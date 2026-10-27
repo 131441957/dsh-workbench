@@ -508,6 +508,34 @@
   // 打开「设置」——跨版本差异：0.2.1-alpha.1 顶栏/侧栏有独立「设置」按钮，
   // 而 0.2.1-rc.3 把设置收进了「更多」菜单里（没有独立按钮）。
   // 所以这里先直点，找不到就点「更多」再点里面的设置（2026-10-27 在 rc.3 床上踩到）。
+  // 设置快捷键兜底：某些版本（0.2.1-rc.3）的设置触发器用原生 popover / 指针手势，
+  // **合成点击打不开**（点了 `dialogs=0`），但它挂了 `aria-keyshortcuts="Control+Alt+,"`，
+  // 而快捷键走的是应用自己的 keydown 监听 → 合成键盘事件能开。
+  // 2026-10-27 在 59480 床实测：按下后 `navCells=5 / dialogs=1 / bodyHasGeneral=true`。
+  const pressSettingsShortcut = () => {
+    const fire = (type) => {
+      for (const target of [document, window]) {
+        try {
+          target.dispatchEvent(new KeyboardEvent(type, {
+            key: ',', code: 'Comma', ctrlKey: true, altKey: true,
+            bubbles: true, cancelable: true, composed: true,
+          }))
+        } catch { /* 忽略 */ }
+      }
+    }
+    fire('keydown')
+    setTimeout(() => fire('keyup'), 60)
+  }
+
+  // 「设置有没有开」的宽松判据：不必等到左侧导航格子渲染出来（那要几百毫秒），
+  // 只要出现带"设置/通用设置"字样的弹层就算开了 —— 用它来决定"还要不要按快捷键"，
+  // 免得快捷键把已经打开的设置又切回去。
+  const settingsLooksOpen = () => {
+    if (settingsNavVisible()) return true
+    return Array.from(document.querySelectorAll('[role="dialog"], dialog, [class*="_overlay"]'))
+      .some((d) => /通用设置|设置/.test(d.textContent || ''))
+  }
+
   const openSettingsPanel = () => {
     // ① 最稳的入口：`[data-slot="settings.launcher"]` / `[data-slot="sidebar.settings"]`
     //    （插槽名跨版本稳定）。**必须点到插槽里面的 <button>**：
@@ -519,21 +547,35 @@
       ? slot
       : (slot.querySelector('button, a, [role="button"]') || slot.closest('button, a, [role="button"]')))
     state.openDebug = { slot: Boolean(slot), target: target ? target.tagName : null }
-    if (target && realClick(target)) return true
+    let fired = false
+    if (target && realClick(target)) fired = true
     // ② 有独立「设置」按钮的版本
-    const direct = findAppButton('设置')
-    if (direct) { realClick(direct); return true }
-    for (const label of ['更多', 'More']) {
-      const more = findAppButton(label)
-      if (!more) continue
-      realClick(more)
-      setTimeout(() => {
-        const inside = findAppButton('设置')
-        if (inside) inside.click()
-      }, 250)
-      return true
+    if (!fired) {
+      const direct = findAppButton('设置')
+      if (direct) { realClick(direct); fired = true }
     }
-    return false
+    // ③ 设置被收进「更多」菜单的版本
+    if (!fired) {
+      const more = ['更多', 'More'].map((label) => findAppButton(label)).find(Boolean)
+      if (more) {
+        realClick(more)
+        setTimeout(() => { const inside = findAppButton('设置'); if (inside) inside.click() }, 250)
+        fired = true
+      }
+    }
+    // ④ 兜底：点完 600ms 还没见到设置 → 按快捷键；再等 800ms 仍没有就再按一次（最多 2 次）。
+    //    rc.3 就是靠这一步才开得出来（合成点击对它无效）。
+    let shortcutTries = 0
+    const ensure = () => {
+      if (settingsLooksOpen()) return
+      if (shortcutTries >= 2) return
+      shortcutTries += 1
+      state.openDebug.shortcut = shortcutTries
+      pressSettingsShortcut()
+      setTimeout(ensure, 800)
+    }
+    setTimeout(ensure, 600)
+    return fired
   }
 
   // 打开「设置」并切到某个分区（插件自带分区的顶栏入口用它）。
@@ -1018,7 +1060,8 @@
 
   const silentSettingsProbe = () => {
     if (probing || state.probeDone) return
-    if (state.sidebarKept) return
+    // 注意：**不再因为 sidebarKept 就跳过**。以前这里是早退，导致 rc.3 一旦判定"打不开"
+    // 就永远不再试；现在有快捷键兜底，保留左栏的版本也能实测一次，打开就能回到极简顶栏。
     if ((location.search + location.hash).includes('wb-selftest=')) return
     if (!state.uiConfig || !state.uiConfig.probeNeeded) return
     if (settingsNavVisible()) return          // 用户自己在设置里，别插手
@@ -1078,6 +1121,16 @@
             verdict: good ? 'reachable' : (hadEntry ? 'unreachable' : 'no-navcell'),
           }, good || state.settingsUnreachable)
           if (state.settingsUnreachable) adoptKeepSidebar()
+          // 反过来：以前因为"打不开"退回保留左栏的版本（rc.3），现在靠快捷键能开了
+          // → 回到极简顶栏（左栏停到屏幕外），插件设置分区也能照常进顶栏。
+          else if (good && state.sidebarKept) {
+            state.sidebarKept = false
+            document.body.classList.remove('wb-keep-sidebar')
+            forceLayout()
+            placeTopbar()
+            refreshTopbar()
+            try { bootDiag() } catch { /* 诊断失败不影响页面 */ }   // 让诊断落到"翻面之后"的状态
+          }
         }, 250)
         return
       }
@@ -1538,6 +1591,27 @@
               }, 1000)
             }, 700)
           }
+          return
+        }
+        if (mode === 'hotkey') {
+          // 跨版本实验（rc.3）：设置触发器的 aria-keyshortcuts 是 Control+Alt+,
+          // 合成 keydown 若走应用自己的快捷键系统就能开（原生 popover 才需要真实用户激活）。
+          const fire = (type) => {
+            for (const target of [document, window]) {
+              target.dispatchEvent(new KeyboardEvent(type, {
+                key: ',', code: 'Comma', ctrlKey: true, altKey: true, bubbles: true, cancelable: true, composed: true,
+              }))
+            }
+          }
+          state.selftestInfo = { fired: true }
+          fire('keydown')
+          setTimeout(() => fire('keyup'), 60)
+          setTimeout(() => {
+            state.selftestInfo.navCells = allBySuffix('navCell').length
+            state.selftestInfo.dialogs = document.querySelectorAll('[role="dialog"], dialog').length
+            state.selftestInfo.settingsOpen = settingsNavVisible()
+            state.selftestInfo.bodyHasGeneral = /通用设置/.test(document.body.textContent || '')
+          }, 1200)
           return
         }
         if (mode === 'layout') {

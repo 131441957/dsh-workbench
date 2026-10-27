@@ -131,7 +131,15 @@ python .\tools\wb.py install-plugin .\plugins\dsh-wb-demo
 | 原版左栏露出来 | 看 `sidebarVisibleRows`；`workbench.js` 的 `findSidebarChain()` 锚点是否拿到 |
 | 想彻底还原 | 删 `ui\workbench.css` + `ui\workbench.js`，或 `wb.py suspend` 停掉整套 |
 
-## 7. 三条别踩的机制（2026-10-27 加）
+## 7. 四条别踩的机制（2026-10-27 加）
+
+**④ 设置打不开时，先试快捷键。**
+某些版本（rc.3）的设置触发器是原生 popover / 指针手势，合成点击开不出来；但它的
+`aria-keyshortcuts`（`Control+Alt+,`）走应用自己的 keydown 监听 → 合成键盘事件能开。
+`openSettingsPanel()` 现在的顺序：点插槽里的 `<button>` → 600ms 没见到设置就按快捷键（最多 2 次）
+→ 再退「更多」菜单。别只做点击，否则那个版本的「设置 / 插件配置」全是死按钮。
+判定「开没开」用 `settingsNavVisible()`（可见的 `*_navCell`），不要用 `body.textContent`
+（内联脚本会假阳性）。
 
 **③ 插件设置分区"提到顶栏"之后才允许从设置里隐藏。**
 判据必须是**顶栏上真有 `data-wb-kind="settings"` 的按钮**（点它会 `openSettingsSection`），
