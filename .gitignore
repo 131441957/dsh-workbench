@@ -12,3 +12,6 @@ ui/landing.html
 MANIFEST.json
 
 dist/
+
+# 第三方/官方反解源码，仅本地参考，不进仓库（公开前尤其注意）
+ref/
