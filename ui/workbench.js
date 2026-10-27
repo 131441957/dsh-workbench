@@ -1388,7 +1388,19 @@
             let info = null
             try { info = window.__wbSlotsDebug ? window.__wbSlotsDebug() : null } catch (err) { info = String(err) }
             state.selftestInfo = { slots: info }
-          }, 1200)
+            // 槽位清单落盘：`state\slots-inventory.json`（谁注册了什么、哪些"想要但没宿主"）
+            try {
+              const inv = window.__wbSlotsInventory ? window.__wbSlotsInventory() : null
+              if (inv) {
+                state.selftestInfo.inventory = { count: inv.count, requested: inv.requested, missingHost: inv.missingHost }
+                fetch('/wb-ui/dom', {
+                  method: 'POST',
+                  headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({ kind: 'html', name: 'slots-inventory.json', html: JSON.stringify(inv, null, 1) }),
+                }).catch(() => {})
+              }
+            } catch (err) { state.selftestInfo.inventoryError = String(err && err.message ? err.message : err) }
+          }, 1500)
           return
         }
         if (mode === 'dupe') {
@@ -1612,6 +1624,30 @@
             state.selftestInfo.settingsOpen = settingsNavVisible()
             state.selftestInfo.bodyHasGeneral = /通用设置/.test(document.body.textContent || '')
           }, 1200)
+          return
+        }
+        if (mode === 'hostpanel') {
+          // 回归：点顶栏「槽位宿主」→ 面板里点第一个"缺宿主"的槽位 → 看宿主框里有没有内容
+          const tab = Array.from(document.querySelectorAll('#wb-topbar button.wb-tab'))
+            .find((b) => (b.textContent || '').trim() === '槽位宿主')
+          state.selftestInfo = { tab: Boolean(tab) }
+          if (tab) tab.click()
+          setTimeout(() => {
+            const text = (document.body.textContent || '').replace(/\s+/g, ' ')
+            state.selftestInfo.hasPanelTitle = text.includes('槽位宿主')
+            state.selftestInfo.listsMissing = /sidebar\.workspaces\.header\.action/.test(text)
+            const btn = Array.from(document.querySelectorAll('button'))
+              .find((b) => (b.textContent || '').trim() === 'sidebar.workspaces.header.action')
+            state.selftestInfo.button = Boolean(btn)
+            if (btn) btn.click()
+            setTimeout(() => {
+              const box = Array.from(document.querySelectorAll('div'))
+                .find((d) => /正在宿主：/.test(d.textContent || '') && d.querySelector('div'))
+              state.selftestInfo.hostedText = box ? (box.textContent || '').replace(/\s+/g, ' ').slice(0, 120) : null
+              // 决定性证据：dsh-chat-manager 那个组件渲出来会带 id="archived-sessions"
+              state.selftestInfo.pluginRendered = Boolean(document.querySelector('#archived-sessions'))
+            }, 900)
+          }, 800)
           return
         }
         if (mode === 'layout') {

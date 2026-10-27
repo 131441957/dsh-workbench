@@ -494,7 +494,24 @@ window.__ModuleLoader__.load({
       inject: ['slots'],
       __test__: { buildRows },
       apply(ctx) {
-        // 诊断：把 ctx.slots 的真实 API 暴露出来（跨版本排查面板不渲染用）
+        // 记录所有插件"想要"的槽位（inject 的入参）。宿主没声明时 inject 永不触发、注册不发生，
+  // 界面上就什么都没有 —— 这是"装了看不见"的机器可判定原因（2026-10-27）。
+  // 注意：打的是共享服务原型，必须透明转发原方法；用原型上的标记保证只打一次。
+  try {
+    const proto = Object.getPrototypeOf(ctx.slots || {})
+    if (proto && typeof proto.inject === 'function' && !proto.__wbInjectPatched) {
+      const orig = proto.inject
+      const wanted = new Map()
+      window.__wbSlotRequests = wanted
+      proto.inject = function (name, fn) {
+        try { const k = String(name); wanted.set(k, (wanted.get(k) || 0) + 1) } catch { /* 忽略 */ }
+        return orig.call(this, name, fn)
+      }
+      proto.__wbInjectPatched = true
+    }
+  } catch { /* 忽略 */ }
+
+  // 诊断：把 ctx.slots 的真实 API 暴露出来（跨版本排查面板不渲染用）
   try {
     window.__wbSlotsDebug = () => {
       const s = ctx.slots || {}
@@ -517,6 +534,108 @@ window.__ModuleLoader__.load({
     }
   } catch { /* 忽略 */ }
 
+  // 槽位清单：把 `ctx.slots.snapshot()` 的树压平成"谁注册了什么"的表格。
+  // 用途（用户 2026-10-27 的纲领：插件是要在工作台上用起来的）：找出**注册了但工作台没渲染**的槽位，
+  // 那才是"装了看不见"的真正原因，而不是猜 CSS。
+  try {
+    window.__wbSlotsInventory = () => {
+      const s = ctx.slots || {}
+      if (typeof s.snapshot !== 'function') return { error: 'no snapshot()' }
+      const out = []
+      const walk = (node) => {
+        if (!node || typeof node !== 'object') return
+        if (node.type === 'slot') {
+          out.push({
+            slot: node.name,
+            kind: node.kind,
+            scope: node.scope,
+            declaredBy: String(node.declaredBy || '').slice(0, 60),
+            occupants: (node.occupants || []).map((o) => ({
+              key: o.key === undefined ? null : String(o.key).slice(0, 40),
+              active: Boolean(o.active),
+              priority: o.priority,
+            })),
+          })
+        }
+        for (const child of node.children || []) walk(child)
+      }
+      for (const tree of s.snapshot() || []) walk(tree)
+      const declared = new Set(out.map((x) => x.slot))
+      // 「想要但没宿主」：插件都走 `ctx.slots.inject(name, …)`，宿主没声明这个槽位时注入器永不触发，
+      // 注册也就不会发生 —— 界面上就是"什么都没有"。把 inject 的入参记录下来就能反推。
+      const wanted = window.__wbSlotRequests instanceof Map ? Array.from(window.__wbSlotRequests.keys()) : []
+      return {
+        count: out.length,
+        slots: out,
+        requested: wanted.sort(),
+        missingHost: wanted.filter((n) => !declared.has(n)).sort(),
+      }
+    }
+  } catch { /* 忽略 */ }
+
+  // ── 槽位宿主面板（2026-10-27，用户纲领：「插件是要在工作台上用起来的」）──────────
+  // 有些插件把界面注册在工作台没有的槽位上（例如 dsh-chat-manager 的
+  // `sidebar.workspaces.header.action` 是 Portable 专有槽位）→ inject 永远不触发、注册不发生、
+  // 界面上什么都没有。这个面板的作用：**工作台自己声明并渲染这些槽位**，
+  // 让这类插件的组件至少能被挂出来（props 缺失时它们可能只是降级，但不会再"人间蒸发"）。
+  // 判据来自 window.__wbSlotsInventory() 的 missingHost。
+  function SlotHostPanel() {
+    const [inv, setInv] = React.useState(null)
+    const [active, setActive] = React.useState('')
+    const [err, setErr] = React.useState('')
+    const [, bump] = React.useState(0)
+    React.useEffect(() => {
+      try { setInv(window.__wbSlotsInventory ? window.__wbSlotsInventory() : null) } catch (e) { setErr(String(e)) }
+    }, [])
+    // 点了某个槽位之后：先渲染一次 → 槽位被"声明" → 插件的 inject 这时才触发注册。
+    // 我们的组件不会自动重渲染，所以显式催几次（300ms × 6），否则永远显示"没有可渲染的内容"。
+    const host = (name) => {
+      setErr('')
+      setActive(name)
+      let n = 0
+      const tick = () => { n += 1; bump(n); if (n < 6) setTimeout(tick, 300) }
+      setTimeout(tick, 300)
+    }
+    let hosted = null
+    if (active) {
+      try {
+        // 这一步就等于"我们当宿主"：调用后该槽位被声明，插件的 inject 立刻触发并渲染
+        hosted = ctx.slots.renderSlot(active, {})
+      } catch (e) { hosted = null; err || setErr(String(e && e.message ? e.message : e)) }
+    }
+    const rows = (inv && inv.missingHost) || []
+    return h('div', { style: { padding: 16, font: '13px/1.6 "Segoe UI", system-ui, sans-serif', color: 'var(--dsw-alias-label-primary)' } },
+      h('div', { style: { fontSize: 15, fontWeight: 600, marginBottom: 6 } }, '槽位宿主'),
+      h('div', { style: { color: 'var(--dsw-alias-label-secondary)', marginBottom: 12 } },
+        inv ? `已声明槽位 ${inv.count} 个；插件想要但**没有宿主**的：${rows.length} 个` : '读取槽位清单…'),
+      rows.length === 0
+        ? h('div', { style: { color: 'var(--dsw-alias-label-secondary)' } }, '没有缺宿主的槽位——所有插件注册的界面都有地方渲染。')
+        : h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 } },
+          rows.map((name) => h('button', {
+            key: name,
+            type: 'button',
+            title: name,
+            onClick: () => host(name),
+            style: {
+              font: '12px/1.4 "Segoe UI", system-ui, sans-serif', padding: '6px 10px', borderRadius: 6, cursor: 'pointer',
+              border: `1px solid ${active === name ? 'var(--dsw-alias-brand-primary, #4b8bf5)' : 'var(--dsw-alias-border-secondary)'}`,
+              background: active === name ? 'var(--dsw-alias-bg-secondary)' : 'transparent',
+              color: 'inherit',
+            },
+          }, name))),
+      active
+        ? h('div', null,
+          h('div', { style: { fontSize: 12, color: 'var(--dsw-alias-label-secondary)', marginBottom: 6 } }, `正在宿主：${active}`),
+          h('div', {
+            style: { border: '1px dashed var(--dsw-alias-border-secondary)', borderRadius: 8, padding: 12, minHeight: 48 },
+          }, hosted === null || hosted === undefined ? h('span', { style: { color: 'var(--dsw-alias-label-secondary)' } }, '这个槽位里没有可渲染的内容（插件可能没注册，或需要额外 props）') : hosted))
+        : null,
+      err ? h('div', { style: { color: 'var(--dsw-alias-label-error, #d33)', marginTop: 8 } }, err) : null,
+      h('div', { style: { marginTop: 18, fontSize: 12, color: 'var(--dsw-alias-label-secondary)' } },
+        '说明：这里只是"给缺宿主的槽位提供一个渲染位"。真正要让插件完整可用，还需要喂对 props（会话类槽位要活的会话上下文）。'),
+    )
+  }
+
   ctx.slots.inject('sidebar.panellist', () =>
           ctx.slots.register(
             { name: 'sidebar.panellist', id: 'wb-api', order: 40, label: () => '状态' },
@@ -534,6 +653,15 @@ window.__ModuleLoader__.load({
         ctx.slots.inject('main', () =>
           ctx.slots.register({ name: 'main', key: 'wb-plugins' }, () => h(Panel, { fixedTab: 'plugins', hideTabs: true })),
         )
+        // 「槽位宿主」：给"插件想要但工作台没有宿主"的槽位一个渲染位（面板本身也是零代码发现，
+        // 顶栏会自动多一个入口，不需要改 ui/workbench.js）
+        ctx.slots.inject('sidebar.panellist', () =>
+          ctx.slots.register(
+            { name: 'sidebar.panellist', id: 'wb-slotshost', order: 60, label: () => '槽位宿主' },
+            Icon,
+          ),
+        )
+        ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: 'wb-slotshost' }, SlotHostPanel))
       },
     }
   },
