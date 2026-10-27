@@ -1155,6 +1155,27 @@ def _pkg_version(pkg_dir: Path) -> str:
         return "?"
 
 
+def client_module_id(pkg_dir: Path) -> str:
+    """从 client.js 里抠出 `__ModuleLoader__.load({ id: '...' })` 的 id。
+
+    这个 id 必须等于包名，否则浏览器端会报
+    `could not load "<包名>"` / `duplicate factory registration`，**整个客户端都起不来**。
+    实测踩过：复制模板只改 package.json，没改这个 id → 装完白页。
+    """
+    for name in ("client.js", "client/client.js", "dist/client.js", "index.client.js"):
+        f = pkg_dir / name
+        if not f.exists():
+            continue
+        try:
+            text = f.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        m = re.search(r"__ModuleLoader__\.load\(\s*\{[^}]*?id:\s*['\"]([^'\"]+)['\"]", text, re.S)
+        if m:
+            return m.group(1)
+    return ""
+
+
 def cmd_install_plugin(spec: str, keep_nav: str = "", no_restart: bool = False) -> int:
     """可视化插件统一安装：装 → 认出界面入口 → 登记白名单 → 安全重启 → 验证。
 
@@ -1165,6 +1186,19 @@ def cmd_install_plugin(spec: str, keep_nav: str = "", no_restart: bool = False) 
         return 2
     head("可视化插件统一安装")
     target = normalize_pkg_name(spec)
+
+    # ⓪-1 静态闸门：client.js 的模块 id 必须等于包名
+    #      （复制模板最容易漏这一步；一旦不一致，浏览器整页 Failed to load plugins）
+    src_dir = Path(spec)
+    if not (src_dir.is_dir() and (src_dir / "package.json").exists()):
+        src_dir = WB_HOME / "profiles" / WB_PROFILE / "node_modules" / target
+    if src_dir.is_dir():
+        mod_id = client_module_id(src_dir)
+        if mod_id and mod_id != target:
+            bad(f"client.js 里的模块 id 是「{mod_id}」，但包名是「{target}」")
+            bad("这个 id 必须等于包名，否则浏览器会整页报 Failed to load plugins（实测踩过）")
+            info(f"改法：把 {src_dir / 'client.js'} 里 __ModuleLoader__.load({{ id: '{mod_id}' … }}) 改成 '{target}'")
+            return 1
 
     # ⓪ 装前快照（profile 三件套 + 台账），验证不过就靠它回滚
     snapshot = pre_install_snapshot()

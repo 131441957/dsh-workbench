@@ -3,10 +3,14 @@
 // 塞进浏览器拿到的 index.html。**不修改安装目录里的任何文件**，删掉 ui 文件或停用本插件即恢复原样。
 import { readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 export const inject = []
 
-const WB_ROOT = process.env.DSH_WORKBENCH_ROOT || 'E:\\DSH-WORKBENCH'
+// 自己的根目录：优先环境变量，其次从本文件位置推导（plugins/<name>/index.js → 上两级）。
+// 别写死路径——同一台机器可以有多套工作台（主套 / rc.3 测试床），写死会让床去伺主机套的 ui。
+const PLUGIN_DIR = fileURLToPath(new URL('.', import.meta.url))
+const WB_ROOT = process.env.DSH_WORKBENCH_ROOT || join(PLUGIN_DIR, '..', '..')
 const UI_DIR = join(WB_ROOT, 'ui')
 const started = new WeakSet()
 let applied = 0

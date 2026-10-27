@@ -5,11 +5,14 @@ import { readFileSync, readdirSync, existsSync, createReadStream } from 'node:fs
 import { readFile } from 'node:fs/promises'
 import { createZstdDecompress } from 'node:zlib'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 export const inject = []
 
 const PREFIX = '/wb-sessions'
-const WB_ROOT = process.env.DSH_WORKBENCH_ROOT || 'E:\\DSH-WORKBENCH'
+// 自己的根目录：优先环境变量，其次从本文件位置推导（别写死，多套工作台共存时会串味）
+const PLUGIN_DIR = fileURLToPath(new URL('.', import.meta.url))
+const WB_ROOT = process.env.DSH_WORKBENCH_ROOT || join(PLUGIN_DIR, '..', '..')
 const STATE = join(WB_ROOT, 'state')
 const started = new WeakSet()
 

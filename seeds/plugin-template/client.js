@@ -3,6 +3,9 @@
 // 工作台顶栏会**自动**发现它（ui\workbench.js 动态扫描 `*_panelRow`），无需改工作台代码。
 // 复制后要改：id / LABEL / key / PREFIX。
 window.__ModuleLoader__.load({
+  // ⚠️ 这个 id 必须与你 package.json 里的 name **完全一致**。
+  //    不一致时浏览器会报 `could not load "<包名>"` / `duplicate factory registration`，
+  //    整个客户端会白页（Failed to load plugins）。wb.py install-plugin 会提前拦住这种情况。
   id: 'wb-plugin-template',
   factory(require) {
     const React = require('react')

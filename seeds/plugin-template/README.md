@@ -36,6 +36,13 @@ python .\tools\wb.py uninstall-plugin dsh-wb-demo
 
 ## 注意
 
+- **`client.js` 里的 `id` 必须等于 `package.json` 的 `name`**。不一致时浏览器会报
+  `could not load "<包名>"` / `duplicate factory registration`，**整个客户端白页**。
+  （2026-10-27 实测踩过：只改了 package.json 没改这个 id → 装完页面直接 Failed to load plugins。）
+  `wb.py install-plugin` 现在会在装之前静态检查这一条并拒绝。
 - 宿主侧不要写 `export const inject = ['webServer']`（硬依赖会拖垮整个实例），用 `ctx.get('webServer')` + 重试。
 - 客户端面板根节点加 `data-wb-panel`：顶栏遮罩靠它判断「我们的面板已就位」。
 - 能力清单（`wb.py caps`）会自动扫 `plugins\*\package.json`，可选声明 `dsh.workbench.capabilities`。
+- 宿主侧取工作台根目录别写死路径，用
+  `const PLUGIN_DIR = fileURLToPath(new URL('.', import.meta.url)); const WB_ROOT = process.env.DSH_WORKBENCH_ROOT || join(PLUGIN_DIR, '..', '..')`
+  —— 同机多套工作台（主套 / 测试床）时写死会串味。

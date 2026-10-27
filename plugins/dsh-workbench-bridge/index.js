@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 // 软依赖：服务用 ctx.get 取，取不到就稍后重试。
 // 绝不能写成 inject: ['webServer','tools']——那样一旦官方改服务名，本 entry 会 pending，
@@ -28,7 +29,10 @@ function wbPort() {
   portCache = { at: now, port }
   return port
 }
-const WB_ROOT = process.env.DSH_WORKBENCH_ROOT || 'E:\\DSH-WORKBENCH'
+// 工作台根目录：优先环境变量，其次从桥自己的位置推导（它永远是 <root>/plugins/dsh-workbench-bridge）。
+// 这样客户机上装到任何目录都对，不必依赖写死路径。
+const PLUGIN_DIR = fileURLToPath(new URL('.', import.meta.url))
+const WB_ROOT = process.env.DSH_WORKBENCH_ROOT || join(PLUGIN_DIR, '..', '..')
 
 function sendJson(res, status, body) {
   res.writeHead(status, {
