@@ -15,7 +15,7 @@
 |---|---|---|---|---|---|
 | PM-01 | 两个安装入口会打架：市场里的「安装」按钮执行 `dsh plugin --profile <当前 profile>`，在工作台里跑就是装进 bench，**绕过白名单与验证** | `dshmarket/lib/dsh-cli.js` 里 `spawnShim(file,[...args,'plugin','--profile',profile,...])` | 装上了但界面看不见（2026-10-27 实测过的现象） | `wb.py fix-ui`：扫描**已装**插件、补 `keepNav`、验证客户端入口是否真被页面加载。谁装的都能补齐治理 | **已完成（2026-10-27）**：`fix-ui` 实测认出 4 个插件 + dshmarket 的「插件市场」+ 页面加载状态 |
 | PM-02 | 装前不打快照、装崩不自动回滚 | `cmd_install_plugin` 只验证，无 backup/restore | 一次装崩要人工 `plugins remove` + 恢复，耗时且易错 | 装前存三件套（profile `package.json` + `pnpm-lock.yaml` + `ui-config.json` + 台账），验证不过自动还原并重装 | **已完成（2026-10-27）**：`backups\pre-install-<时间>\`；端口没起/插件未登记链接 → 自动回滚 |
-| PM-03 | 没有安全模式 | `wb.py start` 只能全量启动 | 插件把 webServer 搞挂 = 界面打不开，只能命令行救 | `wb.py start --safe`：临时补丁把非内置 bundle 全部 `disabled: true` 启动 | 待做 |
+| PM-03 | 没有安全模式 | `wb.py start` 只能全量启动 | 插件把 webServer 搞挂 = 界面打不开，只能命令行救 | `wb.py start-safe`：按每个第三方插件的 `cordis.patch.yml` 抠出 entry id，生成**一次性** `state\safe-mode.patch.yml`（`--patch` 叠加，不写 profile），只禁用第三方、保留内置与自研三个 → 界面能开；退出用 `wb.py restart-safe` | **已完成（2026-10-27）**：实测禁用 `dsh-market` 后页面正常（标题/两个界面插件都在、market 缺席），`restart-safe` 后 market 回归 |
 | PM-04 | `keepNav` 只增不删 | 原来只有 append | 卸载后白名单残留 | `ui-config.json` 里记 `navByPlugin`（哪个插件写的），`uninstall-plugin` 按插件清 | **已完成（2026-10-27）**：卸载实测清掉「测试分区」 |
 | PM-05 | 装的是 `latest`，不锁版本；无安装台账 | profile 里写 `"latest"` | 复现/排障无法知道"当时装的是哪个版本" | `state\installed.json` 记 包名/版本/来源/时间/客户端入口/槽位 | 部分（台账已有并含实际版本；profile 仍写 `latest`，未锁死） |
 | PM-06 | 没有装前兼容预判 | 只能运行期撞；`dshmarket` 声明 peer 最低 `0.2.1-alpha.3` 却在 `0.2.1-alpha.1` 上能跑 | 预判过严会误杀，过宽会撞崩 | `plugin-info` 里做 semver 比对，输出三档结论 | 部分（有侦察，无结论分级） |

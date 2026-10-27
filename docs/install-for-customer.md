@@ -58,10 +58,12 @@ python tools\wb.py doctor      # 逐项自检
 1. **重启后 token 变了**——旧的标签页会失败。重新执行 `python tools\wb.py page` 打开新地址。
 2. 注入层没加载（极少见，`install` 会自动重试一次）。若仍为空：看 `logs\workbench.err.log` 与 `home\logs\startup-*.log`；`python tools\wb.py fix-ui` 也会检查「页面模块表里有没有各个插件的 client.js」。
 
-**Q3：装了个插件之后工作台起不来了？**
+**Q3：装了个插件之后工作台起不来了/白屏？**
 ```powershell
-python tools\wb.py uninstall-plugin <包名>   # 卸掉它（会自动重启并验证）
-python tools\wb.py restore --from latest     # 或者还原最近一份快照
+python tools\wb.py start-safe                # 安全模式：只禁用第三方插件，界面还能开
+python tools\wb.py uninstall-plugin <包名>   # 在安全模式里卸掉可疑插件
+python tools\wb.py restart-safe              # 恢复正常启动
+python tools\wb.py restore --from latest     # 或者直接还原最近一份快照
 ```
 
 **Q4：`attach` 会不会破坏我的 harness？**

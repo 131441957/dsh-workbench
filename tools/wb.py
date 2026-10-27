@@ -728,6 +728,90 @@ def wait_ui_ready(timeout: float = 20.0) -> bool:
     return False
 
 
+def _bench_deps() -> dict:
+    try:
+        meta = json.loads((WB_HOME / "profiles" / WB_PROFILE / "package.json").read_text(encoding="utf-8-sig"))
+        deps = meta.get("dependencies")
+        return deps if isinstance(deps, dict) else {}
+    except Exception:
+        return {}
+
+
+def _bundle_ids_of(pkg: str) -> list[str]:
+    """从插件自己的 cordis.patch.yml 里抠出它注册的 entry id（安全模式要靠 id 禁用）。"""
+    patch = WB_HOME / "profiles" / WB_PROFILE / "node_modules" / pkg / "cordis.patch.yml"
+    if not patch.exists():
+        return []
+    ids = []
+    try:
+        text = patch.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return []
+    for line in text.splitlines():
+        m = re.match(r"^\s*-\s*id:\s*(\S+)", line.strip()) or re.match(r"^-\s*id:\s*(\S+)", line.strip())
+        if m:
+            ids.append(m.group(1))
+    return ids
+
+
+def cmd_start_safe() -> int:
+    """安全模式：只禁用**第三方**插件（保留内置与工作台自己的 3 个），让界面还能打开。
+
+    场景：装了某个插件后工作台起不来/白屏。安全模式能进去 → 在「插件」面板里卸掉它，或用
+    `wb.py uninstall-plugin <包名>`。
+    """
+    head("安全模式启动（禁用第三方插件）")
+    deps = _bench_deps()
+    builtin = [n for n in deps if n.startswith("@deepseek-ai/")]
+    ours = [n for n in deps if n.startswith("dsh-wb-")]
+    others = [n for n in deps if n not in builtin and n not in ours]
+    if not others:
+        warn("没有第三方插件，安全模式 = 普通启动")
+        return cmd_restart_safe()
+
+    ids: list[str] = []
+    for name in others:
+        found = _bundle_ids_of(name)
+        if found:
+            ids.extend(found)
+        else:
+            warn(f"{name} 的 cordis.patch.yml 里没找到 entry id，无法禁用（可先 uninstall-plugin 它）")
+    if not ids:
+        bad("没有可禁用的第三方 entry id")
+        return 1
+
+    patch = STATE_DIR / "safe-mode.patch.yml"
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    body = ["# 安全模式（wb.py start-safe 生成，仅本次启动叠加，不写进 profile）"]
+    for entry_id in ids:
+        body.append(f"- id: {entry_id}")
+        body.append("  disabled: true")
+    patch.write_text("\n".join(body) + "\n", encoding="utf-8")
+    info(f"将禁用第三方 entry：{', '.join(ids)}")
+    info(f"保留：内置 + {', '.join(ours) or '（无）'}")
+
+    cmd_suspend()
+    waited = 0.0
+    while port_listening(WB_PORT) and waited < 20:
+        time.sleep(0.5)
+        waited += 0.5
+    if port_listening(WB_PORT):
+        bad(f"端口 {WB_PORT} 没释放，放弃")
+        cmd_resume()
+        return 1
+    if cmd_start(True, ["--patch", str(patch)]) != 0:
+        cmd_resume()
+        return 1
+    up = wait_ui_ready(25)
+    msg = "注入层已就绪" if up else "注入层没就绪（看 logs/workbench.err.log）"
+    (ok if up else bad)(msg)
+    cmd_resume()
+    head("下一步")
+    info("现在可以在页面「插件」面板里卸掉可疑插件，或：wb.py uninstall-plugin <包名>")
+    info("退出安全模式（恢复正常启动）：wb.py restart-safe")
+    return 0 if up else 1
+
+
 def cmd_restart_safe() -> int:
     """维护模式重启（suspend → 等端口释放 → start → resume），供 GUI/客户用。"""
     head("安全重启工作台（维护模式）")
@@ -2645,7 +2729,7 @@ def is_our_workbench(port: int) -> bool:
         return False
 
 
-def cmd_start(with_watchdog: bool = True) -> int:
+def cmd_start(with_watchdog: bool = True, extra_args: list[str] | None = None) -> int:
     head("启动工作台")
     if not APP_DSH_CMD.exists():
         warn("还没有工作台自己的安装，先同步")
@@ -2677,8 +2761,10 @@ def cmd_start(with_watchdog: bool = True) -> int:
     out_log = LOG_DIR / "workbench.out.log"
     err_log = LOG_DIR / "workbench.err.log"
     with open(out_log, "ab") as fo, open(err_log, "ab") as fe:
+        # ⚠️ 顺序要紧：启动器选项（--profile/--patch）必须在 app 参数（--port/--no-open）之前，
+        #    否则 `--patch` 会被当成 app 参数报 "unknown option '--patch'"。
         serve = subprocess.Popen(
-            ["cmd", "/c", str(APP_DSH_CMD), "--profile", WB_PROFILE,
+            ["cmd", "/c", str(APP_DSH_CMD), "--profile", WB_PROFILE, *(extra_args or []),
              "--port", str(WB_PORT), "--no-open"],
             env=env, stdout=fo, stderr=fe, stdin=subprocess.DEVNULL,
             creationflags=DETACHED | NO_WINDOW,
@@ -3124,6 +3210,7 @@ def main(argv: list[str]) -> int:
         "stop": lambda: cmd_stop(),
         "restart": lambda: cmd_restart(args.with_watchdog),
         "restart-safe": lambda: cmd_restart_safe(),
+        "start-safe": lambda: cmd_start_safe(),
         "logs": lambda: cmd_logs(args.n),
         "watchdog": lambda: cmd_watchdog([int(x) for x in args.main_pids.split(",") if x.strip()]),
     }

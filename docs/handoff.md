@@ -46,8 +46,15 @@ python tools\wb.py detach --target-home <…> --apply                           
 - 装/卸都要**重启目标 harness** 才生效（桥是 host 代码）。
 - 演练办法（别拿真主 profile 试）：在 `state\` 下造一个假 home（`profiles\desktop\package.json` 带最小 bundles），用 `--target-home` 指过去走完整链路。
 
-## 客户自助备份 / 还原（2026-10-27）
-安装器（`tools\wb_gui.py`，桌面「DSH 工作台 安装器」）现在有：
+## 安全模式（2026-10-27）
+```powershell
+python tools\wb.py start-safe     # 只禁用第三方插件（保留内置 + 自研 3 个）→ 界面还能开
+python tools\wb.py restart-safe   # 退出安全模式，恢复正常启动
+```
+实现：读每个第三方依赖的 `node_modules\<pkg>\cordis.patch.yml` 抠出 entry id → 写一次性 `state\safe-mode.patch.yml`（`- id: X / disabled: true`）→ 用 `--patch` 叠加启动（**不写进 profile**）。
+⚠️ **参数顺序坑**：启动器选项（`--profile` / `--patch`）必须排在 app 参数（`--port` / `--no-open`）**前面**，否则报 `error: unknown option '--patch'` 且端口 120 秒起不来。验证 patch 是否生效可先跑 `dsh --profile bench --patch <文件> --dump-config`，看目标行有没有多出 `disabled: true`。
+
+## 客户自助备份 / 还原（2026-10-27）安装器（`tools\wb_gui.py`，桌面「DSH 工作台 安装器」）现在有：
 - **立即备份…**（问一句备注）→ `wb.py backup --note …`
 - **快照列表** → `wb.py backups`（界面读的是 `backups --json`，不解析人类可读输出）
 - **还原快照…**（列表里选一份 + 二次确认）→ `wb.py restore --from <名字>`，还原完会问「要现在安全重启吗」
