@@ -1,127 +1,96 @@
 # 工作台项目 · 新会话接手提示词
 
-> 用法：把下面「=== 复制开始 ===」到「=== 复制结束 ===」之间的内容，原样发到新会话开头。
+> 用法：把「=== 复制开始 ===」到「=== 复制结束 ===」之间原样发到新会话开头。
 
 === 复制开始 ===
 
-接着做「DSH 工作台」项目。先做两件事：①`memory_project("workbench")` 拉项目全景；②`memory_search("工作台 顶栏 SSE 会话面板")` 补细节。记忆库是**跨工作区共享**的（用户定的方案 A），别乱改。
+接着做「DSH 工作台」项目（`E:\DSH-WORKBENCH`）。先按这个顺序补上下文：
+
+1. `memory_project("workbench")` —— 项目全景（记忆库跨工作区共享，别乱改）
+2. 本文件 `docs\handoff.md` —— 你现在读的这份
+3. `docs\compat-matrix.md`（哪些 harness 版本能跑）+ `docs\webui-guide.md`（怎么改界面）
+4. 改代码前先看**文件头注释**——每个文件的头两屏都写了「它干什么 / 为什么这么写 / 怎么验证」
 
 ## 一句话背景
-用户怕改坏主 harness，所以做了一套「工作台」：`E:\DSH-WORKBENCH` 里一份**独立整套** DSH 运行时（自己的 DSH_HOME、profile=bench、端口 59430，禁 agent），插件全装在这里；主 harness（`E:\SSS` + `E:\DSH\home`）**只读不动**，两边靠「接入层」通信。
+用户怕改坏主 harness，所以做了一套「工作台」：`E:\DSH-WORKBENCH` 里一份**独立整套** DSH 运行时
+（自己的 DSH_HOME、profile=bench、端口 59430，不接 agent），插件全装这里；主 harness（`E:\SSS` + `E:\DSH\home`）
+**只读不动**，两边靠「接入层」通信。目标是**能分发给客户装到别的 harness 上**。
 
-## 铁律（违反过一次就别再犯）
-1. **主 harness 一个字节都不许改**：`E:\SSS`、`E:\DSH\home`（尤其 `profiles\desktop\*`）只读。之前我为去掉弹窗手改过主 profile，被用户指出"第一次跨线"，已还原。
-2. **桌面不盲操作**：曾对着以为是工作台的窗口按 Ctrl+R，实际刷了用户正在看的视频页。要操作先确认窗口标题/矩形；能用页面快照、HTTP、日志验证的，就别碰屏幕。
-3. **改 profile 配置写进插件的包补丁**：`<home>\profiles\<p>\cordis.patch.yml` 会被应用在启动时**整体重写**，手加的行会消失；要持久化就写 `plugins\<pkg>\cordis.patch.yml`（`dsh.bundle.patch`）。
-4. **改桥（主驾侧 host 代码）必须重启主程序**才生效——ESM 缓存不热更。改工作台侧（plugins/ui）只需 `wb.py restart`。
-5. **改代码用编辑工具/写文件**，别用 PowerShell 拼字符串（`\n`、反引号、中文引号都会被吃掉）；改完 `node --check` / `py_compile` 复核。
+## 铁律（每条都踩过）
+1. **主 harness 一个字节都不许改**：`E:\SSS`、`E:\DSH\home`（尤其 `profiles\desktop\*`）只读。
+   唯一例外：`attach/detach` 改**目标** profile 的 `package.json`，且默认干跑、要 `--apply`。
+2. **绝不重装主 harness**；工作台「同步运行时」只是把主驾当前安装**复制**到 `app\`。
+3. **根目录一律从自身位置推导**（`__file__` / `import.meta.url`），不许写死——本机并存主套与测试床。
+4. **前端类名只按后缀匹配**：DSH 用 CSS-in-JS，前缀每版本重生成（alpha.1=`OSewFq_`，rc.3=`mP3x-q_`），
+   写死前缀会**静默失效**（布局回原版、遮罩/设置裁剪悄悄不工作）。CSS 用 `[class*="_frame"]`，
+   JS 用 `bySuffix()/allBySuffix()`。
+5. **判断可见性/文本用 `textContent`，不要 `innerText`**（被 visibility 藏住的元素没有 innerText）。
+6. **隐藏清单别吃自己**：`HIDE_TEXTS` 不要放自己会用的文字，遍历时跳过 `#wb-topbar`。
+7. **改桥或宿主插件要重启对应 harness**；改 `ui/` 只要刷新页面。
+8. **杀进程按 `ExecutablePath` 过滤，绝不按 `CommandLine`**（命令行里带 cwd，会误杀工具助手）。
+9. **操作桌面不盲点**：先确认窗口再动手；能用 `boot-diag` / HTTP / 日志验证的就不碰屏幕。
+10. **说"能用"必须有运行时证据**：端口在听 + `/wb-ui` 认领 + 页面模块表 + `boot-diag` 无报错。
+11. 改代码用编辑工具，别用 PowerShell 拼字符串；改完 `node --check` / `python -m py_compile` 复核。
 
-## 现在的状态（已 20 项完成）
-- **运行时**：`tools\wb.py`（Python 3.10 纯标准库）负责 install / start / stop / restart / suspend / resume / backup / restore / rollback / sync-app / api / compat / info / paths / caps / doctor；`tools\wb_gui.py` 是可视化安装器。
-- **生命周期**：watchdog 盯主驾进程（主驾关→8 秒内关工作台）；supervisor 随登录自启（主驾开→拉起工作台）。
-- **接入层**（装在主 profile，软依赖）：`plugins\dsh-workbench-bridge`，路由 `/wb-bridge/{status,plugins,sessions,session/page,session/prompt,events}`，token 在 `state\bridge-token.txt`（请求头 `x-wb-token`）；工具 `workbench_status / workbench_api / workbench_plugins`（原 `workbench_web_search` 已于 2026-10-27 删除，见待办 6）。
-- **SSE 实时流**：桥 `/wb-bridge/events` 每 3 秒推 `{workbench:{reachable,latencyMs},sessions:{count,running,latest}}`；工作台代理 `/wb-sessions/events` 转发；面板用 EventSource 自动刷新。
-- **工作台插件**：`dsh-wb-api-browser`（状态面板 key `wb-api`：宿主服务/前端槽位/profile 分层/主驾状态 **+ 独立「工作台插件」面板 key `wb-plugins`**，用 `h(Panel,{fixedTab:'plugins',hideTabs:true})` 复用同一份 Panel）、`dsh-wb-sessions`（Harness 会话：列表/历史/发送 + 标题 + 工作区分组）、`dsh-wb-ui`（webui 注入层）、`dsh-workbench-bridge`（主驾侧接入层）。**`dsh-wb-web` 已于 2026-10-27 整体卸载**（它只是当初用来测工作台的样板能力出口，`/wb-web/search` 与主驾 `web_search` 重复）：profile 里的依赖/bundle 已删、node_modules 链接已剪、插件目录已从仓库移除（`/wb-web/*` 现在 404），源码仍在 git 历史与旧快照里，要恢复就 `git checkout` 旧版本 + `wb.py plugins add`。
-- **UI 现状**：左栏已改**顶栏**（纯 CSS：`.OSewFq_frame` 强制 flex、隐藏 sidebar/rightbar/handle、centerCol 撑满；`body{padding-top:46px}`）。**顶栏不写死**（2026-10-27 改）：`ui\workbench.js` 动态扫描侧栏入口行（`[class*="_panelRow"]`）生成按钮，规则是 `LEFT_ORDER=['Harness会话','插件']`、`RIGHT_ORDER=['状态','设置']`、**名单里没有的入口自动排到左边末尾**——所以装/卸插件都不需要改工作台代码。兜底：`设置`不是面板行，名单里的名字扫不到行时按文字 `findButton` 补上。面板根节点带 `data-wb-panel`，`maskUnknownMain()` 在面板就位前遮罩主区，避免「探索未至之境」闪一下（6 秒超时保护）。
-- **装插件的标准姿势**（2026-10-27 起）：`seeds\plugin-template\` 是现成模板，复制改名 → `wb.py plugins add <绝对路径>` → `wb.py restart`，顶栏自动出现新面板。**`plugins add` 必须传绝对路径**：profile 里写的是 `link:<路径>`，而 link 是相对 profile 目录解析的，传相对路径会装成一个不存在的目录（install 直接失败）。详见 `seeds\plugin-template\README.md`。
-- **插件备注**（2026-10-27 新增）：顶栏「插件」面板里每个插件下面有一条备注，点一下就地编辑（`Ctrl+Enter` 保存 / `Esc` 取消 / 清空即删除），过滤框也能按备注内容搜。存 `state\plugin-notes.json`（UTF-8，先写 .tmp 再 rename），接口 `GET/POST /wb-api/notes`；该文件**已加进 `wb.py backup` 的 state 白名单**（`BACKUP_STATE_FILES`），别让它在快照里漏掉。
-- **面板数据来源**（2026-10-27 修）：`/wb-api/live` 里**服务是实时枚举的**（走 `ctx.reflect.store` 的 Symbol 键，用属性描述符数方法，**绝不 `get` 服务对象**以免触发初始化），槽位是客户端概念、宿主拿不到，只能给 `api-live.json` 的快照并附 `slotsCollectedAt`；`/wb-api/build`（profile 分层）靠面板上的**「刷新基线」按钮**触发 `POST /wb-api/refresh` → 宿主 spawn `dsh --profile bench --dump-config` → 解析后重写 `api-build.json`。面板底部会把每条数据的来源和采集时间标出来，别再拿旧快照当实时数据。
-- **第三方插件实验（2026-10-27，第一个真实案例 `dshmarket` 1.70.2）**：`wb.py plugins add dshmarket`（需要 `npm_config_registry=https://mirrors.cloud.tencent.com/npm/`）→ 装进 bench profile → restart → 能跑。它注册的是**设置里的一个分区**（`settings.section`，「插件市场」），不是主面板；点它自己的「侧栏显示」后，会多一条 `sidebar.panellist` 入口，**顶栏靠动态发现自动接上**（实测 5 个按钮：Harness会话 / 插件 / 插件市场 / 状态 / 设置）。踩到两个坑见下方验证段。
-- **设置页导航列必须保留**（2026-10-27 修）：早先为了「只留语言/外观/字号」把 `.ZCYAFq_nav` 整列 `display:none`，结果**任何插件加的设置分区都点不到**。现在只隐藏 `.ZCYAFq_navTitle`/`.ZCYAFq_actions` 并压窄导航列，分区过滤交给 `KEEP_NAV` 白名单——**第三方插件加了设置分区，要把它的标题加进 `KEEP_NAV`**（已加「插件市场」）。
-- **面板深链接**：地址栏 `#wb-panel=插件` 可直接打开指定面板（`ui\workbench.js` 的 `WANT_PANEL`）。必须用 **hash**——token 用完会重定向到 `/`，query 会被剥掉。
-- **会话面板**：290px 左栏；首部三行（标题/实时状态/过滤+排序）；**按工作区分组**（默认排序=按工作区）：分组键是 `cwd`，组头显示工作区名——名字来自宿主新增接口 `/wb-sessions/workspaces`（只读主驾 `storages\workspace.json`，`default-workspace` 按原版规则显示成「默认工作区」），取不到才退回目录末段；可折叠、组头加粗+胶囊计数+分隔线；行缩进 20px、运行中圆点发光；**行标题来自桥透出的 `summary.projections.values.title`**（`/wb-sessions/list` 已带 `title`）。⚠️ 曾经分组键误用 `sessionLabel()`（优先标题），导致每条会话自成一组、组头全是标题——已修，回归测试 `tools\test-sessions-group.mjs`。
-- **设置页**：只留 语言 / 外观 / 字号大小；其余按标题文字隐藏（`pruneSettings()`，正则 `[\w-]+_(row|group|setting)`，别按 `[data-slot]` 判断——它包住整个区域）。
-- **备份**：`wb.py backup --note "…"` → `backups\snapshot-<时间>.zip`（含 tools/plugins/seeds/docs/ui + config.json + home/profiles/bench + home/storages/*.json；**不收** credentials/app/state/logs）。现有 5 份快照全保留 + 运行时备份 `app-0.2.1-alpha.1-*`（1.69 GB，`rollback` 秒回）。
+## 现在的状态（2026-10-27，功能面已清空）
 
-## 把工作台挂到另一台机器 / 别人的 harness 上（2026-10-27）
+**工具链** `tools\wb.py`（3200 行，纯标准库）：
+- 装与修：`install`（含 preflight 门禁 + 首启自愈）｜`sync-app`｜`rollback`
+- 启与停：`start`｜`stop`｜`restart`｜`restart-safe`｜`suspend`｜`resume`｜`start-safe`（只禁第三方插件）
+- 状态：`status`｜`info`（机器可读 JSON）｜`doctor`｜`paths`｜`caps`｜`compat`｜`watch`｜`api`｜`logs`
+- 备份：`backup --note`｜`backups [--json]`｜`restore --from`
+- 插件：`plugin-info`｜`install-plugin`（装前快照 + 失败回滚 + 模块 id 闸门）｜`uninstall-plugin`｜`fix-ui`｜`plugin-search`｜`plugin-update [--apply]`
+- 体检：`preflight --install <目录>` —— 三档 `compatible / degraded / incompatible`
+- 接入：`attach/detach`（把桥装进目标 harness 的 profile，默认干跑）
+- 分发：`pack`｜`prepublish`｜`registry [--refresh]`｜`sync-bed <根目录>`
+
+**四个插件**（都在 `plugins\`，每个文件头部有路由表/渲染说明/验证命令）：
+- `dsh-wb-ui`：注入层（tapIndex 改首页 + 标题 + 三条 `/wb-ui` 路由）
+- `dsh-wb-sessions`：「Harness会话」面板（代理到主驾桥；**自己渲染 Markdown**）
+- `dsh-wb-api-browser`：「插件」+「状态」两个面板（插件台账 + 社区注册表 + 活体快照 + 备注）
+- `dsh-workbench-bridge`：**唯一装在主 harness 的插件**（软依赖），`/wb-bridge/*` + 四个 `workbench_*` 工具
+
+**界面**：`ui\workbench.js`（顶栏动态发现 + 遮罩 + 设置裁剪 / 741 行，头部有 `[A]~[J]` 结构图与 boot 时间线）
++ `ui\workbench.css`（逐段注释，跨版本后缀选择器）。改界面读 `docs\webui-guide.md`。
+
+**两个实例并存**：主套 `59430`（含测试插件 dshmarket）与 rc.3 测试床 `59480`（客户镜像，无 market）。
+两者都是 headless（`dsh.cmd` node 模式），不占 Electron 单实例锁、不用 cookie profile。
+
+## 分发与公开
+- 打给客户：`wb.py pack --force` → `dist\DSH-Workbench-<版本>\`；硬指标 `MANIFEST.absolutePathHits` 必须 **0**
+- 测试插件永不进包（`testOnlyPlugins` 声明）；内部文档按前缀排除
+- 私有仓：`https://github.com/131441957/dsh-workbench`（**已推送**，推送需走本机代理 127.0.0.1:10808，
+  已写进该仓库的 git 配置）
+- **公开前三关**：`wb.py prepublish` 退出码 0 → 处理 `ref/` 历史（filter-repo 或确认授权）→ 决定 LICENSE
+
+## 跨版本（这是"能不能给客户"的核心）
+已实测：**0.2.1-alpha.1 ✅**（日常）、**0.2.1-rc.3 ✅**（测试床）。
+换任何新版本照这个来：`wb.py preflight --install <目录>` → 看三档结论 → 复制分发包到新根 →
+`paths --redetect --install <目录> --home <新根>\home` → 改端口 → `install` → `status`。
+改完主套代码要 `wb.py sync-bed <床根>` 同步，否则床里跑的是旧代码。
+
+## 常用验证（不要靠猜）
 ```powershell
-python tools\wb.py attach [--target-home <对方的 DSH_HOME>] [--target-profile desktop]          # 预览
-python tools\wb.py attach --target-home <…> --apply                                              # 真正写
-python tools\wb.py detach --target-home <…> --apply                                              # 撤掉
+python tools\test-http.py --bridge      # 接口 + 桥 17 项（含无 token 应 401）
+python tools\probe-ui.py --root .       # 页面自报：cssFrameApplied 必须 flex、sidebarVisibleRows 必须 0
+node tools\test-markdown.mjs            # 会话面板 Markdown 渲染
+node tools\test-sessions-group.mjs      # 分组回归（组头必须是工作区名）
+node tools\test-plugin-notes.mjs        # 插件备注行数据
+node tools\test-capabilities.mjs        # 能力声明合法性
+python tools\wb.py doctor|status|info|preflight
+python tools\wb_gui.py --selftest       # 安装器不崩
 ```
-- **只碰目标 profile 的 `package.json`**（`dependencies` + `dsh.profile.bundles`）与 `node_modules` 里那条链接；**绝不碰安装目录（app.asar / E:\SSS）**。
-- 装的是 `dsh-workbench-bridge` 一个包，且**强制软依赖**：`attach` 会先检查桥源码里有没有 `export const inject = []`，不是软依赖就**拒绝安装**（硬依赖会把目标 harness 打死）。
-- 默认干跑（只打印计划）；`--apply` 才写，写前把目标清单备份到 `backups\attach-<时间>\` / `detach-<时间>\`。
-- 目标 profile 没有 `dsh.profile.bundles` 时直接拒绝（不是 DSH profile）。
-- 装/卸都要**重启目标 harness** 才生效（桥是 host 代码）。
-- 演练办法（别拿真主 profile 试）：在 `state\` 下造一个假 home（`profiles\desktop\package.json` 带最小 bundles），用 `--target-home` 指过去走完整链路。
+`state\boot-diag.json` 每次页面加载 4.6 秒后自动写：`shellClasses`（真实类名 + `cssFrameApplied`）、
+`sidebarVisibleRows`、`topbarTabs`、`discovered`、`hasPanel`、`errors`。
 
-## 安全模式（2026-10-27）
-```powershell
-python tools\wb.py start-safe     # 只禁用第三方插件（保留内置 + 自研 3 个）→ 界面还能开
-python tools\wb.py restart-safe   # 退出安全模式，恢复正常启动
-```
-实现：读每个第三方依赖的 `node_modules\<pkg>\cordis.patch.yml` 抠出 entry id → 写一次性 `state\safe-mode.patch.yml`（`- id: X / disabled: true`）→ 用 `--patch` 叠加启动（**不写进 profile**）。
-⚠️ **参数顺序坑**：启动器选项（`--profile` / `--patch`）必须排在 app 参数（`--port` / `--no-open`）**前面**，否则报 `error: unknown option '--patch'` 且端口 120 秒起不来。验证 patch 是否生效可先跑 `dsh --profile bench --patch <文件> --dump-config`，看目标行有没有多出 `disabled: true`。
-
-## 客户自助备份 / 还原（2026-10-27）安装器（`tools\wb_gui.py`，桌面「DSH 工作台 安装器」）现在有：
-- **立即备份…**（问一句备注）→ `wb.py backup --note …`
-- **快照列表** → `wb.py backups`（界面读的是 `backups --json`，不解析人类可读输出）
-- **还原快照…**（列表里选一份 + 二次确认）→ `wb.py restore --from <名字>`，还原完会问「要现在安全重启吗」
-- 顶部多一行**构建信息**：`构建：分发包 0.1.0-<日期> / 源码工作区 · wb.py 更新于 … · 根目录 …`——客户排障时先看这行，能确认安装器是不是旧版
-
-配套命令：
-- `wb.py backups --json`：机器可读快照列表（`items[{name,kb,time,note}]`）
-- `wb.py restart-safe`：维护模式重启（suspend → 等端口释放 → start → resume），GUI 用它，避免抢端口假故障
-
-演练（2026-10-27 实测）：先做基线快照 → 追加一行到 `ui\workbench.css` + 删掉 `plugins\dsh-wb-ui\index.js` → `restore --from <基线>` → css 哈希回到基线、插件文件恢复、`/wb-ui` 与插件清单正常。
-> 顺序不能反：**必须先打基线快照再破坏**（先破坏再备份等于把坏状态存进去）。还原会连代码一起回滚——所以修完代码要重打基线，旧快照是陷阱。
-
-## 分发给客户（2026-10-27）
-```powershell
-python tools\wb.py pack            # → dist\DSH-Workbench-<版本>\（含 README/MANIFEST）
-python tools\wb.py pack --force    # 覆盖
-```
-- 包内只有 `tools/ ui/ docs/(面向使用者的) seeds/ plugins/(4 个) config.template.json README.md MANIFEST.json`；**不含** `app/ home/ state/ logs/ backups/ attic/ ref/ dist/`。
-- **测试插件（dshmarket / 插件市场）永远不进包**——`MANIFEST.json` 里 `testOnlyPlugins` 明确写出来，`excludedPlugins` 记实际排除的。
-- `MANIFEST.json` 的 `absolutePathHits` 必须为 **0**：它扫包内所有文本里的本机绝对路径；不为 0 就别发货。当前 0。
-- 端口不再写死：`config.json` 的 `port` → 环境变量 `DSH_WORKBENCH_PORT` → 59430；启动时端口被别人占用会自动挑下一个并写回 config。界面从 `/wb-ui/config` 读端口，桥每 5 秒从 config 解析一次端口。
-- 种子里的 `${WB_ROOT}` / `${WB_HOME}` 在 `ensure_profile` 建 profile 时渲染，客户机上自动落到他的目录。
-
-## 装一个带界面的插件（统一方法，2026-10-27 定）```powershell
-python E:\DSH-WORKBENCH\tools\wb.py plugin-info   <包名>   # 只侦察：client 入口 / 注册槽位 / 设置分区 / peer
-python E:\DSH-WORKBENCH\tools\wb.py install-plugin <包名|目录> [--keep-nav 标题] [--no-restart]
-```
-`install-plugin` 一条命令做完五件事：①装进 bench profile（pnpm，走 `home\profiles\bench\.npmrc` 里的镜像）②按 `package.json` 的 `exports["./client"]` 找客户端入口、解析 `slots.inject/register`（含 `const SLOT='…'` 常量写法）认出它会露在哪 ③把设置分区标题写进 `state\ui-config.json` 的 `keepNav`（**裁剪白名单已从 `ui\workbench.js` 搬到这个文件，读 `/wb-ui/config`**，所以装插件再也不用改代码）④安全重启（先 stop、等端口真的释放、再 start，避开 EADDRINUSE 假故障）⑤验证：端口 / bundle+linked / 页面模块表里有没有 `<包名>/client.js` / **本次启动**（按日志偏移量算）有没有 EADDRINUSE 或 startup failed。
-
-两条坑要记住：
-- **市集卡片上的短名 ≠ npm 包名**。`dsh-message-ops` 的真名是 `@240xu/dsh-message-ops`；权威数据在 `https://awesome-dsh-plugin.com/plugins.json`（含 `npm`、`install`、`capabilities` 字段）。
-- **很多“可视化插件”注册的是 `conversation.*` / `chat.*` / `composer.*` 槽位**，而工作台没有会话界面（不接 agent）——装了功能在、界面看不见。`install-plugin` 会对这种情况明确告警，别以为装失败。
-
-
-## 常用验证手段（别靠猜）
-
-> git：本仓库**没有配全局身份**，直接 `git commit` 会报 `Author identity unknown`；用 `git -c user.name=meow -c user.email=meow@local commit -m "…"`，提交后 `git status --short` 必须为空。
-> 重启会换 token：`wb.py restart` 之后，已经开着的页面 cookie 失效（主区全白）。**必须**把页面导航到 `wb.py url` 打出的新地址（`Ctrl+L` 输入后可能要按两次 Enter，第一次会被地址栏下拉建议吃掉）。
-> 动浏览器之前**每次都要重新确认标签**：标题里的「和另外 N 个页面」就是标签数，活动标签不一定还是上次那个。2026-10-27 我沿用昨晚「只有一个标签」的结论直接导航，把用户正开着的 dsh-market 页面顶掉了（已用 `Alt+←` 恢复）。正确做法：先 `Get-Process msedge → MainWindowTitle` + 截图看清标签，再决定按键。
-> `wb.py restart` 有**抢端口风险**：真凶是 **supervisor 看到端口空出来就抢先起一个实例**，和我们这次的启动抢端口 → 新实例 `listen EADDRINUSE … 127.0.0.1:59430` → webserver 挂 → `startup failed: N required plugins did not activate`（12 个 pending）。**维护型重启一律走 `safe_restart`（suspend → 等端口释放 → start → resume）**；手工遇到时先 `wb.py suspend`，起来后再 `wb.py resume`。看到 startup failed 先别怪插件：确认 59430 只有一个 owner + 看 `home\logs\startup-*.log`。
-
-```powershell
-python E:\DSH-WORKBENCH\tools\wb.py status       # 端口/守护/版本
-python E:\DSH-WORKBENCH\tools\wb.py info         # 单行 JSON（GUI 也用它）
-python E:\DSH-WORKBENCH\tools\wb.py caps         # 工作台独有能力清单
-python E:\DSH-WORKBENCH\tools\wb.py url          # 带 token 的当前地址（重启后必用）
-curl  http://127.0.0.1:59430/wb-ui               # 注入层状态
-curl  http://127.0.0.1:59430/wb-sessions/health  # 主驾端口/token
-curl  http://127.0.0.1:59430/wb-sessions/workspaces  # 工作区注册表（分组显示名）
-# 页面自报结构：POST /wb-ui/dom → state\dom-snapshot.json；控制台 __WB_UI__ / __wbSweep()
-# 开机自诊断：每次加载页面 4.6 秒后自动写 state\boot-diag.json（按钮表 / hasPanel / clickLog / JS 报错 / console.error / **discovered 侧栏发现 / topbarTabs 顶栏按钮**）
-node E:\DSH-WORKBENCH\tools\test-sessions-group.mjs   # 分组回归（工作区 vs 标题）
-node E:\DSH-WORKBENCH\tools\test-plugin-notes.mjs     # 插件备注的行数据形状（note 字段/筛选/其它标签不受影响）
-node E:\DSH-WORKBENCH\tools\test-capabilities.mjs     # 能力声明校验（route 在本插件 PREFIX 下、名字唯一、method 合法）
-python E:\DSH-WORKBENCH\tools\wb.py plugins list        # 工作台插件（bundle/linked/spec）
-python E:\DSH-WORKBENCH\tools\wb.py plugins remove <名> # 卸载：删依赖+bundle → pnpm install
-```
-
-## 待办
-1. **会话标题**：已完成，并已运行时复核（2026-10-26 22:48，`/wb-sessions/list` 三条标题均为中文正常：`检查 docs handoff.md 文件` / `DeepSeek harness 附属 Web 隔离方案` / `检查E盘可用插件`）。取值顺序=投影 `projections.values.title` → 日志兜底 → cwd 末段 → `#短号`。
-2. **GitHub 远程仓**：用户明确「暂不上传」。
-3. **能力「按名调用」通路：已完成（2026-10-27）**。链路：插件在 `package.json` 的 `dsh.workbench.capabilities` 声明 `{name, description, method, route, query?, body?}` → 工作台 `GET /wb-api/capabilities` 汇总（api-browser 宿主扫描 `plugins\*\package.json`）→ 主驾桥 `GET /wb-bridge/capabilities`（20 秒缓存，`?fresh=1` 强刷）与 `POST /wb-bridge/call`（带 `x-wb-token`，body `{name, params}`）→ 主驾工具 `workbench_call`（`name:"capabilities"` 即可列出全部）。校验脚本 `tools\test-capabilities.mjs`：route 必须落在本插件 `PREFIX` 之下、名字不可重复、method 只能 GET/POST。现有 8 条：`sessions_list / sessions_page / sessions_send / workspaces / plugins / notes / note_set / capabilities`。⚠️ 桥属主驾侧 host 代码，**改完要重启主程序才生效**。**已重启并验证（2026-10-27）**：`workbench_call` 能列出 8 条能力、按名调 GET（`sessions_list`）、带 query（`sessions_page` 传 id/max）、POST（`note_set` 写入并回显）；传错名字返回 `可用能力：…` 列表；直连 `POST /wb-bridge/call` 带 `x-wb-token` 返回 200，不带返回 401。
-4. **已关闭（2026-10-26 用户拍板）**：主 profile 现有插件（除 `meow-memory` 外还有 `dsh-meow-panel` / `persona-preset` / 4 个第三方功能包）**一律不动、不隔离、不搬**。用户原话「不用，现在的插件都不用动，因为我暂时不会去修改它」。别再拿 A/B 方案来问。
-5. **已完成（2026-10-27）**：`/wb-web` 已随 `dsh-wb-web` 插件卸载（用户原话「那就给他撤掉，而且这个插件是用来测试工作台的，完全卸载掉也可以」）。顺带给 `wb.py plugins` 补上了 `remove` 动作（原来文档写了但没有实现）。剩可选项：细粒度会话事件推送（现在只有 tick 汇总）。
-6. **已完成（2026-10-27，用户同意后动的主 profile）**：主驾桥里的 `workbench_web_search` 工具已删除（连同指向 `/wb-web/search` 的 `wbSearch()`、schema、render、注册行与日志文案）；桥里现在只剩 `workbench_status / workbench_api / workbench_plugins` 三个工具。改动前备份在 `backups\pre-bridge-nowebsearch-20261027-1112\`（含 index.js / package.json / 主 profile package.json）。⚠️ **桥是主驾侧 host 代码，必须重启主程序才生效**；重启前主驾进程里仍是旧代码。
+## 待办（真实剩余）
+1. **跨机器验证**：目前所有验证都是同机多实例，没在第二台机器上跑过 `install → attach → 页面`
+2. **公开收尾**：`ref/` 历史清理 + LICENSE（见上）
+3. 可选：细粒度会话事件推送（现在只有 3 秒 tick 汇总）
+4. 可选：`dshmarket` 只是测试插件，要不要长期留着由用户定
 
 ## 用户偏好
-中文、简短、要证据不要"应该可以"；改完要**运行时验证**；重要节点主动 `wb.py backup`（旧快照一律不删，备注写清楚）；不确定就报告，别闷头猜；别让他手动点窗口，能用脚本/接口就自己来。
+中文、简短、要证据不要"应该可以"；改完必须运行时验证；重要节点主动 `wb.py backup`（旧快照一律不删）；
+不确定就报告别闷头猜；**别让他手动点窗口**——能用脚本/接口就自己来；出错必须汇报并写进记忆。
 
 === 复制结束 ===
