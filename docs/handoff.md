@@ -19,7 +19,7 @@
 ## 现在的状态（已 20 项完成）
 - **运行时**：`tools\wb.py`（Python 3.10 纯标准库）负责 install / start / stop / restart / suspend / resume / backup / restore / rollback / sync-app / api / compat / info / paths / caps / doctor；`tools\wb_gui.py` 是可视化安装器。
 - **生命周期**：watchdog 盯主驾进程（主驾关→8 秒内关工作台）；supervisor 随登录自启（主驾开→拉起工作台）。
-- **接入层**（装在主 profile，软依赖）：`plugins\dsh-workbench-bridge`，路由 `/wb-bridge/{status,plugins,sessions,session/page,session/prompt,events}`，token 在 `state\bridge-token.txt`（请求头 `x-wb-token`）；工具 `workbench_status / workbench_api / workbench_plugins / workbench_web_search`。
+- **接入层**（装在主 profile，软依赖）：`plugins\dsh-workbench-bridge`，路由 `/wb-bridge/{status,plugins,sessions,session/page,session/prompt,events}`，token 在 `state\bridge-token.txt`（请求头 `x-wb-token`）；工具 `workbench_status / workbench_api / workbench_plugins`（原 `workbench_web_search` 已于 2026-10-27 删除，见待办 6）。
 - **SSE 实时流**：桥 `/wb-bridge/events` 每 3 秒推 `{workbench:{reachable,latencyMs},sessions:{count,running,latest}}`；工作台代理 `/wb-sessions/events` 转发；面板用 EventSource 自动刷新。
 - **工作台插件**：`dsh-wb-api-browser`（状态面板 key `wb-api`：宿主服务/前端槽位/profile 分层/主驾状态 **+ 独立「工作台插件」面板 key `wb-plugins`**，用 `h(Panel,{fixedTab:'plugins',hideTabs:true})` 复用同一份 Panel）、`dsh-wb-sessions`（Harness 会话：列表/历史/发送 + 标题 + 工作区分组）、`dsh-wb-ui`（webui 注入层）、`dsh-workbench-bridge`（主驾侧接入层）。**`dsh-wb-web` 已于 2026-10-27 整体卸载**（它只是当初用来测工作台的样板能力出口，`/wb-web/search` 与主驾 `web_search` 重复）：profile 里的依赖/bundle 已删、node_modules 链接已剪、插件目录已从仓库移除（`/wb-web/*` 现在 404），源码仍在 git 历史与旧快照里，要恢复就 `git checkout` 旧版本 + `wb.py plugins add`。
 - **UI 现状**：左栏已改**顶栏**（纯 CSS：`.OSewFq_frame` 强制 flex、隐藏 sidebar/rightbar/handle、centerCol 撑满；`body{padding-top:46px}`）。**顶栏不写死**（2026-10-27 改）：`ui\workbench.js` 动态扫描侧栏入口行（`[class*="_panelRow"]`）生成按钮，规则是 `LEFT_ORDER=['Harness会话','插件']`、`RIGHT_ORDER=['状态','设置']`、**名单里没有的入口自动排到左边末尾**——所以装/卸插件都不需要改工作台代码。兜底：`设置`不是面板行，名单里的名字扫不到行时按文字 `findButton` 补上。面板根节点带 `data-wb-panel`，`maskUnknownMain()` 在面板就位前遮罩主区，避免「探索未至之境」闪一下（6 秒超时保护）。
@@ -54,7 +54,7 @@ python E:\DSH-WORKBENCH\tools\wb.py plugins remove <名> # 卸载：删依赖+bu
 3. **能力注册表的“按名调用”通路**：等第一个**自研插件**出现再做（原则：只登记主驾没有的能力，`package.json` 的 `dsh.workbench.capabilities` 声明）。
 4. **已关闭（2026-10-26 用户拍板）**：主 profile 现有插件（除 `meow-memory` 外还有 `dsh-meow-panel` / `persona-preset` / 4 个第三方功能包）**一律不动、不隔离、不搬**。用户原话「不用，现在的插件都不用动，因为我暂时不会去修改它」。别再拿 A/B 方案来问。
 5. **已完成（2026-10-27）**：`/wb-web` 已随 `dsh-wb-web` 插件卸载（用户原话「那就给他撤掉，而且这个插件是用来测试工作台的，完全卸载掉也可以」）。顺带给 `wb.py plugins` 补上了 `remove` 动作（原来文档写了但没有实现）。剩可选项：细粒度会话事件推送（现在只有 tick 汇总）。
-6. **待用户点头（涉及主 profile）**：主驾桥里还有个 `workbench_web_search` 工具，函数 `wbSearch()` 指向已删除的 `/wb-web/search`，现在调用只会返回 `{ok:false,error:…}`。要彻底干净得改 `plugins\dsh-workbench-bridge\index.js` 删掉该工具——这是**主 profile 侧**，需用户明确同意后才能动。
+6. **已完成（2026-10-27，用户同意后动的主 profile）**：主驾桥里的 `workbench_web_search` 工具已删除（连同指向 `/wb-web/search` 的 `wbSearch()`、schema、render、注册行与日志文案）；桥里现在只剩 `workbench_status / workbench_api / workbench_plugins` 三个工具。改动前备份在 `backups\pre-bridge-nowebsearch-20261027-1112\`（含 index.js / package.json / 主 profile package.json）。⚠️ **桥是主驾侧 host 代码，必须重启主程序才生效**；重启前主驾进程里仍是旧代码。
 
 ## 用户偏好
 中文、简短、要证据不要"应该可以"；改完要**运行时验证**；重要节点主动 `wb.py backup`（旧快照一律不删，备注写清楚）；不确定就报告，别闷头猜；别让他手动点窗口，能用脚本/接口就自己来。
