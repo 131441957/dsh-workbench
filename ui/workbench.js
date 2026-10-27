@@ -125,6 +125,8 @@
         topbarTabs: Array.from(document.querySelectorAll('#wb-topbar button.wb-tab')).map((b) => b.textContent),
         pluginSectionTabs: ((state.uiConfig && state.uiConfig.extra) || []).slice(0, 12),
         selftestHit: state.selftestHit || null,
+        settingsOpen: settingsNavVisible(),
+        closeDebug: state.closeDebug || null,
         selftestInfo: state.selftestInfo || null,
         selftestRan: Boolean(state.selftestRan),
         settingsNavCells: allBySuffix('navCell').map((c) => (c.textContent || '').replace(/\s+/g, ' ').trim()).slice(0, 16),
@@ -427,8 +429,61 @@
     setTimeout(() => step(0), 200)
   }
 
+  // 切到面板时先把设置弹层关掉。
+  // 用户 2026-10-27 报的 bug：「点了桌宠配置以后再点插件，配置界面没有自动关闭掉」——
+  // 设置是我们替用户打开的，切走时必须由我们负责关，否则弹层会盖在新面板上。
+  // 「设置弹层开着没有」的**唯一可靠判据**：设置左侧导航格子（`*_navCell`）是否可见。
+  // 不能用「overlay 元素存在 / 可见」——页面上还有别的 overlay（遮罩、toast），
+  // 基线（没开设置）时也会命中，导致自检永远报"开着"（2026-10-27 踩过）。
+  const settingsNavVisible = () => allBySuffix('navCell').some((el) => {
+    const rect = el.getBoundingClientRect()
+    return rect.width > 10 && rect.height > 10
+  })
+
+  // 设置弹层容器：从可见的导航格子往上找，找到"内部含关闭按钮"的那一层
+  const settingsContainer = () => {
+    const cell = allBySuffix('navCell').find((el) => {
+      const rect = el.getBoundingClientRect()
+      return rect.width > 10 && rect.height > 10
+    })
+    if (!cell) return null
+    let node = cell
+    for (let depth = 0; depth < 12 && node; depth += 1) {
+      if (node.querySelector && node.querySelector('[class*="_close"]')) return node
+      node = node.parentElement
+    }
+    return cell.closest('[class*="_overlay"]') || cell
+  }
+
+  // 切到面板时先把设置弹层关掉（用户 2026-10-27 报的 bug：
+  // 「点了桌宠配置以后再点插件，配置界面没有自动关闭掉」）。
+  // 设置是我们替用户打开的，切走时必须由我们负责关，否则弹层会盖在新面板上。
+  const closeSettingsIfOpen = () => {
+    const container = settingsContainer()
+    state.closeDebug = { navVisible: settingsNavVisible(), container: Boolean(container) }
+    if (!container) return false
+    const closeBtn = container.querySelector('[class*="_close"]') || bySuffix('close')
+    if (closeBtn) {
+      try {
+        closeBtn.click()
+        state.closeDebug.clicked = String(closeBtn.className || "").slice(0, 60)
+        return true
+      } catch (err) {
+        state.closeDebug.error = String(err && err.message ? err.message : err).slice(0, 80)
+      }
+    }
+    try {
+      for (const target of [document, window]) {
+        target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }))
+      }
+      state.closeDebug.escaped = true
+    } catch { /* 兜底失败就算了，不影响切面板 */ }
+    return false
+  }
+
   const clickTab = (tab) => {
     if (tab.kind === 'settings') return openSettingsSection(tab.section)
+    closeSettingsIfOpen()
     // 优先按文字现找（React 重绘会换掉行元素），找不到再用建栏时缓存的元素
     const btn = findButton(tab.label) || (tab.el && tab.el.isConnected ? tab.el : null)
     if (btn) btn.click()
@@ -843,6 +898,18 @@
       const mode = (location.hash.match(/wb-selftest=([a-z]+)/) || [])[1] || 'settings'
       setTimeout(() => {
         state.selftestRan = true
+        if (mode === 'switch') {
+          // 先点插件设置按钮（打开设置弹层），1 秒后再点某个面板入口，
+          // 期望：设置被自动关掉（diag 里的 settingsOpen 应为 false）
+          const bars = Array.from(document.querySelectorAll('#wb-topbar button.wb-tab'))
+          const sectionTab = bars.filter((b) => b.dataset.wbKind === 'settings')[0]
+          if (sectionTab) sectionTab.click()
+          setTimeout(() => {
+            const panelTab = bars.find((b) => b.dataset.wbKind !== 'settings' && b.textContent === '插件')
+            if (panelTab) panelTab.click()
+          }, 1000)
+          return
+        }
         if (mode === 'tab') {
           // 点**顶栏上那个插件设置按钮**，走真实用户路径
           const extra = (state.uiConfig && state.uiConfig.extra) || []
