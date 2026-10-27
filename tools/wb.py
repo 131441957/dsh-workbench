@@ -1321,8 +1321,22 @@ def cmd_install_plugin(spec: str, keep_nav: str = "", no_restart: bool = False) 
     (ok if up else bad)(f"端口 {WB_PORT} {'在听' if up else '没起来'}")
     healthy = False
     if up:
-        try:
-            data = http_json(f"http://127.0.0.1:{WB_PORT}/wb-api/plugins")
+        # 「端口在听」≠「插件解析完」。刚重启时服务先起、插件后挂，此时 `/wb-api/plugins`
+        # 会 404 —— 早先直接判失败，把一次好安装回滚掉了（2026-10-27 重装 dshmarket 踩到）。
+        # 所以先等注入层就绪（/wb-ui 应答），再读清单；读到 404/连接失败都算"还没好"，重试。
+        wait_ui_ready(25)
+        data = None
+        for attempt in range(12):
+            try:
+                data = http_json(f"http://127.0.0.1:{WB_PORT}/wb-api/plugins")
+                break
+            except Exception as exc:  # noqa: BLE001
+                if attempt == 0:
+                    info(f"插件清单还没就绪（{exc}），等它挂载…")
+                time.sleep(1.5)
+        if data is None:
+            bad("等不到 /wb-api/plugins（注入层或状态插件没起来）")
+        else:
             row = next((p for p in data.get("plugins", []) if p.get("name") == target), None)
             if row:
                 healthy = bool(row.get("inBundles") and row.get("linked"))
@@ -1330,8 +1344,6 @@ def cmd_install_plugin(spec: str, keep_nav: str = "", no_restart: bool = False) 
                     f"{target}: bundle={'✓' if row.get('inBundles') else '✗'} linked={'✓' if row.get('linked') else '✗'} v={row.get('version')}")
             else:
                 bad(f"插件清单里没有 {target}")
-        except Exception as exc:  # noqa: BLE001
-            warn(f"读插件清单失败：{exc}")
 
     if not (up and healthy):
         bad("验证没过，回滚到装前状态")
