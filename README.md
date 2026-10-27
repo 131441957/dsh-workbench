@@ -64,4 +64,12 @@ python tools\wb.py uninstall-plugin <包名>  # 卸干净（profile / node_modul
 
 ## 状态
 
-开发中（私有仓库）。所有测试通过后再公开。
+已可用（MIT 许可）。验证过的 harness 版本：**0.2.1-alpha.1** 与 **0.2.1-rc.3**（两个版本上
+`install` 一键装 + 页面 + 接口用例全过）。换新版本先跑 `python tools\wb.py preflight`。
+
+已知限制：跨**机器**尚未验证（目前都是同机多实例）；插件市场的注册表搜索依赖
+`awesome-dsh-plugin.com` 的公开 JSON，离线时只能用确切包名安装。
+
+## 许可
+
+MIT，见 [LICENSE](LICENSE)。
