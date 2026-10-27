@@ -7,10 +7,18 @@ pid 关掉），页面里注入的 workbench.js 会自己把诊断写到 state\\
 用法：
     python tools/probe-ui.py --root .                  # 当前这一套
     python tools/probe-ui.py --root E:\\WB-<版本>       # 测试床
+    python tools/probe-ui.py --root . --wait-field settingsProbe   # 等静默探测跑完再读
+                                                                  # （第一份诊断 4.6 秒就写，
+                                                                  #   探测结果在 5~7 秒才落盘）
 
 关键字段（换 harness 版本后先看这两个）：
     shellClasses.cssFrameApplied → "flex" 才算布局 CSS 命中（"grid" = 选择器没匹配上）
     sidebarVisibleRows           → 必须是 0（原版侧栏没藏干净就会 >0）
+
+设置相关字段：
+    settingsProbe → {ran, opened, attempts, titles, sections, ms}：页面有没有静默扫过设置分区
+    settingsOpen  → 扫完必须回到 false（还开着就说明弹层没被关掉）
+    closeDebug    → 关弹层用的是什么（clicked=点了 × / escaped=按了 Esc 兜底）
 
 坑：
  ① 入口 URL 的 token 是**一次性**的：拿旧 URL 再开一次会得到 "dsh web authentication required"，
@@ -32,6 +40,10 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--root", required=True)
 ap.add_argument("--keep-open", action="store_true")
 ap.add_argument("--query", default="", help="附在入口 URL 后的 hash 参数，例如 wb-selftest=settings")
+ap.add_argument("--wait-field", default="",
+                help="等到 boot-diag 里出现这个顶层字段再读（例如 settingsProbe：静默探测要 5~7 秒才写完，"
+                     "默认的第一份 4.6 秒诊断里没有它）")
+ap.add_argument("--timeout", type=float, default=25.0, help="最长等多久（秒），默认 25")
 args = ap.parse_args()
 
 ROOT = Path(args.root)
@@ -73,16 +85,22 @@ if ud.exists():
     shutil.rmtree(ud, ignore_errors=True)
 
 proc = subprocess.Popen([str(edge), f"--user-data-dir={ud}", "--no-first-run", "--new-window", url])
-deadline = time.time() + 25
+deadline = time.time() + max(5.0, args.timeout)
 data = None
 while time.time() < deadline:
     time.sleep(1.0)
     if diag.exists():
         try:
             data = json.loads(diag.read_text(encoding="utf-8"))
-            break
         except Exception:
-            pass
+            continue
+        # 页面会写多份诊断（4.6 秒一份、静默探测后一份）。要等某个字段就继续轮询，
+        # 否则拿到的永远是最早那份（踩过：settingsProbe 永远读不到）。
+        # 注意判**真假**而不是"键在不在"：那份早期诊断里字段存在但值是 null。
+        if args.wait_field and not data.get(args.wait_field):
+            data = None
+            continue
+        break
 if not args.keep_open:
     proc.terminate()
 
@@ -97,3 +115,9 @@ print("topbarTabs    :", " / ".join(data.get("topbarTabs") or []))
 print("discovered    :", " / ".join(data.get("discovered") or []))
 print("sidebarRows   :", data.get("sidebarVisibleRows"))
 print("shellClasses  :", json.dumps(data.get("shellClasses") or {}, ensure_ascii=False))
+# 设置相关：确认"静默探测"到底跑没跑、跑完有没有把设置关掉
+print("settingsOpen  :", data.get("settingsOpen"), "| sidebarKept:", data.get("sidebarKept"))
+if data.get("settingsProbe") is not None:
+    print("settingsProbe :", json.dumps(data.get("settingsProbe"), ensure_ascii=False)[:400])
+if data.get("closeDebug") is not None:
+    print("closeDebug    :", json.dumps(data.get("closeDebug"), ensure_ascii=False)[:200])
