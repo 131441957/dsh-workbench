@@ -257,15 +257,16 @@
   const scanSidebarEntries = () => {
     const rows = Array.from(document.querySelectorAll('[class*="_panelRow"]'))
       .filter((el) => !el.closest('#wb-topbar'))
-    const seen = new Set()
-    const out = []
+    // 同名入口：**后出现的那个才是插件的**（插件的侧栏行注册晚于内建页面）。
+    // 0.2.1-rc.3 上就有两个「插件」：内建插件管理器 + 我们的 wb-plugins 面板，
+    // 取第一个会点进原版页面（用户 2026-10-27 报「插件界面功能没有」）。
+    const byLabel = new Map()
     for (const el of rows) {
       const label = textOf(el)
-      if (!label || seen.has(label)) continue
-      seen.add(label)
-      out.push({ label, el, entry: label, panelTab: PANEL_TAB_HINTS[label] })
+      if (!label) continue
+      byLabel.set(label, { label, el, entry: label, panelTab: PANEL_TAB_HINTS[label] })
     }
-    return out
+    return Array.from(byLabel.values())
   }
 
   // 发现结果 → 顶栏布局（偏好顺序优先，未知入口自动归左边）
@@ -988,6 +989,49 @@
       const mode = (location.hash.match(/wb-selftest=([a-z-]+)/) || [])[1] || 'settings'
       setTimeout(() => {
         state.selftestRan = true
+        if (mode === 'panel') {
+          // 从**顶栏**点「插件」，看落到哪个面板（我们的会显示"工作台插件"标题）
+          const tab = Array.from(document.querySelectorAll('#wb-topbar button.wb-tab'))
+            .find((b) => (b.textContent || '').trim() === '插件')
+          if (tab) tab.click()
+          setTimeout(() => {
+            const panels = Array.from(document.querySelectorAll('[data-wb-panel]')).map((el) => ({
+              key: el.getAttribute('data-wb-panel'),
+              w: Math.round(el.getBoundingClientRect().width),
+            }))
+            const text = (document.body.textContent || '').replace(/\s+/g, ' ')
+            state.selftestInfo = {
+              clicked: Boolean(tab),
+              panels,
+              masked: Boolean(state.mainMasked),
+              hasWorkbenchPluginsPanel: text.includes('工作台插件'),
+              hasOriginalManager: text.includes('实验性插件'),
+              snippet: text.slice(0, 100),
+            }
+          }, 900)
+          return
+        }
+        if (mode === 'dupe') {
+          // 诊断：同名的多个入口里，哪一个才是我们自己的面板
+          const rows = Array.from(document.querySelectorAll('button[aria-label], button'))
+            .filter((b) => !b.closest('#wb-topbar') && (b.textContent || '').trim() === '插件')
+          const out = []
+          const step = (i) => {
+            if (i >= rows.length) {
+              state.selftestInfo = { candidates: rows.length, results: out }
+              return
+            }
+            try { rows[i].click() } catch { /* 忽略 */ }
+            setTimeout(() => {
+              const ours = document.querySelector('[data-wb-panel="plugins"], [data-wb-panel="wb-plugins"]')
+              const rect = ours ? ours.getBoundingClientRect() : null
+              out.push({ index: i, oursVisible: Boolean(rect && rect.width > 50), sample: (document.body.innerText || '').replace(/\s+/g, ' ').slice(0, 60) })
+              step(i + 1)
+            }, 450)
+          }
+          step(0)
+          return
+        }
         if (mode === 'check') {
           // 诊断：点设置入口后，页面里到底有没有出现"设置弹层/分区列表"
           openSettingsPanel()
