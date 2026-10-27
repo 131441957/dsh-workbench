@@ -52,10 +52,53 @@ LOG_DIR = WB_ROOT / "logs"
 STATE_DIR = WB_ROOT / "state"
 PIDS_FILE = STATE_DIR / "pids.json"
 
-NODE_EXE = Path(r"E:\nodejs\node.exe")
-GIT_EXE = Path(r"C:\Program Files\Git\cmd\git.exe")
-PNPM_MJS = MAIN_HOME / r"dsh-runtimes\dsh-primary-runtime\dependencies\pnpm\bin\pnpm.mjs"
-MEMORY_DB = Path(r"E:\肥鱼工作区\.dsh-meow\memory.db")
+def _find_node() -> Path:
+    if os.environ.get("NODE_EXE"):
+        return Path(os.environ["NODE_EXE"])
+    for cand in (Path(r"E:\nodejs\node.exe"), Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "nodejs" / "node.exe"):
+        if cand.exists():
+            return cand
+    found = shutil.which("node")
+    return Path(found) if found else Path("node")
+
+
+def _find_git() -> Path:
+    for cand in (Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git" / "cmd" / "git.exe",
+                 Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Git" / "cmd" / "git.exe"):
+        if cand.exists():
+            return cand
+    found = shutil.which("git")
+    return Path(found) if found else Path("git")
+
+
+def pnpm_mjs() -> Path | None:
+    """pnpm 随 harness 的分发目录走，别写死本机 home；找不到返回 None（只有装插件时才需要）。"""
+    candidates = [
+        Path(MAIN_HOME) / r"dsh-runtimes\dsh-primary-runtime\dependencies\pnpm\bin\pnpm.mjs",
+        Path(MAIN_HOME) / r"dsh-runtimes\dsh-primary-runtime\dependencies\pnpm\bin\pnpm.cjs",
+        Path(MAIN_HOME) / "dsh-runtimes" / "primary-runtime" / "dependencies" / "pnpm" / "bin" / "pnpm.mjs",
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    return None
+
+
+def memory_db() -> Path | None:
+    """记忆库位置随工作区变化；本机没有就当没有，别报错。"""
+    env = os.environ.get("MEOW_MEMORY_DB")
+    candidates = [Path(env)] if env else []
+    candidates += [Path(r"E:\肥鱼工作区\.dsh-meow\memory.db"),
+                   Path(os.getcwd()) / ".dsh-meow" / "memory.db"]
+    for c in candidates:
+        if c.exists():
+            return c
+    return None
+
+
+NODE_EXE = _find_node()
+GIT_EXE = _find_git()
+MEMORY_DB = None   # 运行时用 memory_db() 现查
 LEVELS = ["soul", "user", "project", "fact", "lesson", "topic", "rules"]
 
 DETACHED = 0x00000008
@@ -382,9 +425,11 @@ def kill_tree(pid: int) -> bool:
 
 
 # ── 目录 / 状态 ─────────────────────────────────────────────────────────
-def memory_counts(db: Path) -> dict:
+def memory_counts(db: Path | None) -> dict:
+    if db is None:
+        return {"note": "本机没有记忆库（跳过，不影响工作台）"}
     if not db.exists():
-        return {"error": f"数据库不存在: {db}"}
+        return {"note": f"记忆库不存在：{db}（跳过）"}
     try:
         conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True, timeout=5)
     except Exception as exc:  # noqa: BLE001
@@ -1396,7 +1441,7 @@ def cmd_pack(out: str = "", include_test: bool = False, force: bool = False) -> 
             for f in sorted(src.glob("*")):
                 if not f.is_file():
                     continue
-                if any(f.name.startswith(p) for p in ("handoff", "upgrade-policy", "meow-memory-", "dsh-issue-", "plugin-manager-gaps", "tools-plan")):
+                if any(f.name.startswith(p) for p in ("handoff", "upgrade-policy", "meow-memory-", "dsh-issue-", "plugin-manager-gaps", "tools-plan", "publish-checklist")):
                     continue
                 shutil.copy2(f, dest / "docs" / f.name)
             info(f"已复制 docs/（内部记录已排除）")
@@ -2550,10 +2595,13 @@ def ensure_profile() -> int:
 
 # ── 启动 / 停止 ─────────────────────────────────────────────────────────
 def is_our_workbench(port: int) -> bool:
-    """端口上那个进程是不是我们的工作台（用 /wb-ui 的 uiDir 认领）。"""
+    """端口上那个进程是不是**我们这一份**工作台：比 /wb-ui 报的 uiDir 是否等于自己的 ui 目录。"""
     try:
         data = http_json(f"http://127.0.0.1:{port}/wb-ui", timeout=2.0)
-        return bool(data.get("ok")) and "uiDir" in data
+        ui_dir = str(data.get("uiDir") or "")
+        if not data.get("ok") or not ui_dir:
+            return False
+        return Path(ui_dir).resolve() == (WB_ROOT / "ui").resolve()
     except Exception:
         return False
 
@@ -2701,7 +2749,9 @@ def cmd_doctor() -> int:
     head("运行时")
     info(f"python      {sys.version.split()[0]}  ({sys.executable})")
     (ok if NODE_EXE.exists() else bad)(f"node        {NODE_EXE}")
-    (ok if PNPM_MJS.exists() else bad)(f"pnpm.mjs    {PNPM_MJS}")
+    pnpm = pnpm_mjs()
+    (ok if pnpm else warn)(
+        f"pnpm       {pnpm}" if pnpm else "pnpm       没找到（只在装插件时用到：确认 harness 自带或已 sync-app）")
     (ok if GIT_EXE.exists() else warn)(f"git         {GIT_EXE}")
     try:
         pipv = subprocess.run([sys.executable, "-m", "pip", "--version"], capture_output=True, text=True,
@@ -2710,7 +2760,7 @@ def cmd_doctor() -> int:
         pipv = ""
     (ok if pipv else warn)(f"pip         {pipv or '不可用'}")
     java = shutil.which("java") or ""
-    (ok if java else warn)(f"java        {java or '缺失（需要时装到 G 盘）'}")
+    (ok if java else warn)(f"java        {java or '未安装（可选，只有少数工具链需要）'}")
 
     head("主 harness")
     cfg = {}
@@ -2726,7 +2776,7 @@ def cmd_doctor() -> int:
     (ok if ports else warn)(f"主 GUI 端口 {', '.join(map(str, ports)) or '未检测到'}")
 
     head("记忆（只读）")
-    counts = memory_counts(MEMORY_DB)
+    counts = memory_counts(memory_db())
     if "error" in counts:
         bad(counts["error"])
     else:
@@ -2736,7 +2786,12 @@ def cmd_doctor() -> int:
     (ok if APP_EXE.exists() else warn)(f"独立安装    {APP_EXE if APP_EXE.exists() else '未同步（wb.py sync-app）'}")
     (ok if (WB_HOME / 'profiles' / WB_PROFILE / 'package.json').exists() else warn)(f"profile     {WB_HOME / 'profiles' / WB_PROFILE}")
     pids = listening_pids(WB_PORT)
-    (ok if pids else warn)(f"端口 {WB_PORT} {'在听 pid=' + str(pids) if pids else '空闲'}")
+    if pids and is_our_workbench(WB_PORT):
+        ok(f"端口 {WB_PORT} 在听 pid={pids}")
+    elif pids:
+        warn(f"端口 {WB_PORT} 被别的程序占着（不是这一份工作台）——wb.py start 会自动换端口")
+    else:
+        warn(f"端口 {WB_PORT} 空闲")
     wd = read_pids().get("watchdog") or 0
     (ok if (wd and pid_alive(int(wd))) else warn)(f"看门狗      {'运行中 pid=' + str(wd) if (wd and pid_alive(int(wd))) else '未运行'}")
     return 0
@@ -2752,13 +2807,18 @@ def cmd_status() -> int:
         warn("主 GUI 没在跑")
     files, size = dir_size(MAIN_HOME)
     info(f"home        {files} 文件 / {size / 1048576:.1f} MB")
-    counts = memory_counts(MEMORY_DB)
+    counts = memory_counts(memory_db())
     info("记忆        " + ("无法读取: " + counts["error"] if "error" in counts
                           else " / ".join(f"{k}={v}" for k, v in counts.items())))
 
     head("工作台")
     pids = listening_pids(WB_PORT)
-    (ok if pids else warn)(f"端口 {WB_PORT} {'在听 (pid=' + ','.join(map(str, pids)) + ')' if pids else '没在听（wb.py start）'}")
+    if pids and is_our_workbench(WB_PORT):
+        ok(f"端口 {WB_PORT} 在听 (pid={','.join(map(str, pids))})")
+    elif pids:
+        warn(f"端口 {WB_PORT} 被别的程序占着（不是这一份工作台）——wb.py start 会自动换端口")
+    else:
+        warn(f"端口 {WB_PORT} 没在听（wb.py start）")
     wd = int(read_pids().get("watchdog") or 0)
     (ok if (wd and pid_alive(wd)) else warn)(f"看门狗      {'运行中 pid=' + str(wd) if (wd and pid_alive(wd)) else '未运行'}")
     state_file = STATE_DIR / "main-status.json"
@@ -2775,7 +2835,7 @@ def cmd_watch(quiet: bool = False) -> int:
     payload = {
         "collectedAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "mainHarness": {"ports": ports, "install": str(MAIN_INSTALL), "home": str(MAIN_HOME)},
-        "memory": memory_counts(MEMORY_DB),
+        "memory": memory_counts(memory_db()),
         "workbench": {"port": WB_PORT, "listening": bool(listening_pids(WB_PORT))},
         "profiles": {},
     }

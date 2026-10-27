@@ -49,6 +49,25 @@
 
 > 备注（2026-10-27）：做 1、2 时发现「重启抢端口」的真凶不是 `restart` 本身，而是**supervisor 看到端口空出来就抢先起实例**。所以维护型重启必须走「suspend → 等端口释放 → start → resume」（`wb.py` 里的 `safe_restart`），否则日志里永远有 EADDRINUSE 假故障。
 
+## 6. 空环境验收（2026-10-27 首轮）
+
+做法：把 `dist\DSH-Workbench-*` 复制成「客户解压后的样子」（`state\client-sim\wb`），配一个**假 harness home**（只有 `profiles\desktop\package.json`），在本机以 `DSH_WORKBENCH_ROOT` 指向副本跑命令，**不碰真实配置**。
+
+| 检查项 | 结果 |
+|---|---|
+| `paths --redetect --home <假> --install E:\SSS` | ✅ 写进**副本自己的** `config.json`，不污染本机 |
+| `doctor`（副本视角） | ✅ 报出「未同步运行时 / profile 未建 / 看门狗未运行」——符合空环境预期 |
+| `attach --apply --no-install` | ✅ 桥链接解析到**副本自己的** `plugins\dsh-workbench-bridge`（证明根目录推导可移植） |
+| `detach --apply --no-install` | ✅ 假 profile 还原为 `deps:{}`、`bundles:[base,web-app]` |
+
+**这一步抓出 3 个真 bug（已修）**：
+1. `pnpm.mjs` 路径写死在本机 `E:\DSH\home\...` → 改成从检测到的 `MAIN_HOME` 推导，找不到只警告（只有装插件才需要）
+2. `is_our_workbench()` 只要端口上有 `/wb-ui` 就认领 → 现在比对 `/wb-ui` 回报的 `uiDir` 是否等于自己的 `ui/`，避免把别人的工作台当成自己的（副本视角已验证会报「被别的程序占着」）
+3. 记忆库路径写死 `E:\肥鱼工作区\.dsh-meow\memory.db` → 改成现查，缺了就显示「跳过」，不再报错
+4. 附带：`java 缺失（需要时装到 G 盘）` 这种本机文案改成「未安装（可选）」
+
+还没验的（下一步）：真正的 `install`（要复制 1.7GB 运行时到副本）与副本里启动/打开页面。
+
 ## 5. 验收标准（怎么算做完）
 
 - 装一个插件：一条命令，装前有快照，装后自动验证，失败自动回滚，台账里有记录
