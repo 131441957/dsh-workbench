@@ -34,9 +34,10 @@ DSH 前端是 CSS-in-JS，类名 = **每版本重新生成的 hash 前缀** + �
 所以：
 
 - **CSS 里一律用后缀匹配**：`[class*="_frame"]`、`[class*="_sidebarCol"]`……
-- **JS 里一律用后缀匹配**：`[class*="_panelRow"]`
+- **JS 里一律用后缀匹配**：`[class*="_panelRow"]`；`workbench.js` 顶部备好了两个helper：
+  `bySuffix('frame')` / `allBySuffix('navCell', root)`，新代码直接用它们，别自己拼选择器
 - 写死前缀（`.OSewFq_frame`）的写法在换版本后会**静默失效**——不报错，只是布局回到原版。
-  2026-10-27 就是这样踩的：rc.3 上 frame 仍是 grid，左侧留白 280px。
+  2026-10-27 就是这样踩的：rc.3 上 frame 仍是 grid，左侧留白 280px；同时遮罩与设置裁剪也全都悄悄不工作。
 
 ## 2. 怎么验证你改的东西生效了
 

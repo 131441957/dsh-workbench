@@ -1,19 +1,62 @@
-/* ────────────────────────────────────────────────────────────────
- * 工作台 UI 注入脚本（改完刷新页面即生效；删掉本文件即完全恢复原样）
+/* ══════════════════════════════════════════════════════════════════════════
+ * 工作台 UI 注入脚本（ui\workbench.js）
+ * --------------------------------------------------------------------------
+ * 谁注入它：plugins\dsh-wb-ui 在服务端用 webServer.tapIndex 把本文件塞进首页 </body> 前。
+ * 改完刷新页面即生效；删掉本文件（或停用 dsh-wb-ui）→ 界面立刻恢复原版。
+ * 不修改安装目录里任何文件，也不 fork 前端源码。
  *
- * 改造目标：把原版左侧栏换成顶部横向导航条。
- * 思路：不重写任何面板逻辑——只把原侧栏藏起来，另建一条顶栏，
- *       顶栏按钮点击时转去点原侧栏里的同名入口（DOM click 对隐藏元素同样有效）。
- * ──────────────────────────────────────────────────────────────── */
+ * ── 它到底做什么 ─────────────────────────────────────────────────────────
+ * 原版界面是「左侧竖栏导航 + 中列内容」。工作台把导航改成顶部横向条：
+ *   1. 把原侧栏那条链路（若干"窄而高"的容器）整体 display:none
+ *   2. 另建一条 #wb-topbar；顶栏按钮点击时**去点原侧栏里的同名入口**
+ *      （DOM click 对 display:none 的元素同样有效，所以不用重写任何面板逻辑）
+ *   3. 面板清单**动态发现**（扫 `*_panelRow`），装/卸插件不用改本文件
+ *
+ * ── 三条不变量（改这个文件前务必守住）───────────────────────────────────
+ * ① 一切类名匹配**只按后缀**：DSH 前端是 CSS-in-JS，类名 = 每版本重新生成的 hash 前缀
+ *    + 稳定语义后缀。实测 alpha.1 = `OSewFq_frame`，rc.3 = `mP3x-q_frame`；
+ *    写死前缀会**静默失效**（不报错，只是布局/裁剪悄悄不生效）。统一走 bySuffix()。
+ * ② 判断"元素可见/文本"用 textContent，**不要用 innerText**：遮罩用 visibility:hidden
+ *    藏主区，被藏元素没有 innerText（曾因此点击永不触发、面板挂不上）。
+ * ③ 隐藏清单里不要放自己会用到的文字，并且 sweep 遍历时跳过 `#wb-topbar`
+ *    （HIDE_TEXTS 曾经把顶栏自己新加的「插件」按钮一起藏了）。
+ *
+ * ── 文件结构（按出现顺序）────────────────────────────────────────────────
+ *   [A] 状态与自诊断      state / __WB_UI__ / 错误捕获 / bootDiag() → state\boot-diag.json
+ *   [B] 基础样式注入      attachStyle()：顶栏与 .wb-hidden 的样式
+ *   [C] 弹窗与 toast      dismiss() 关「预览版说明」；sweep() 里静音无 agent 的报错 toast
+ *   [D] 入口发现          scanSidebarEntries() / planTabs() / entryFor() / findButton()
+ *   [E] 顶栏              buildTopbar() / refreshTopbar() / clickTab() / markActive()
+ *   [F] 布局              findSidebarChain() / placeTopbar() / reserveTopSpace() / forceLayout()
+ *   [G] 默认面板          openDefault()：把主区从落地页切到「Harness会话」（或 hash 指定）
+ *   [H] 设置页            pruneSettings() 按标题文字裁剪；KEEP_NAV 白名单来自 /wb-ui/config
+ *   [I] 首帧遮罩          maskUnknownMain()：面板就位前藏住主区，6 秒上限
+ *   [J] 启动              boot()：按时间线跑若干轮 sweep/布局/默认面板，最后写诊断
+ *
+ * ── 改完怎么验证（别凭肉眼）──────────────────────────────────────────────
+ *   页面加载 4.6 秒后自动写 state\boot-diag.json，重点字段：
+ *     shellClasses.cssFrameApplied  → 必须是 "flex"（"grid" 说明布局 CSS 没命中）
+ *     sidebarVisibleRows            → 必须是 0（原版侧栏没藏干净就会 >0）
+ *     topbarTabs / discovered       → 顶栏最终顺序 / 扫到的入口
+ *     hasPanel / errors             → 我们的面板是否挂上、有没有 JS 报错
+ *   不想自己开浏览器：`python tools\probe-ui.py --root <工作台根>` 会加载一次并读回这些字段。
+ *   控制台钩子：__WB_UI__ / __wbSweep() / __wbProbeSettings() / __wbSnapshot('tag')
+ * ══════════════════════════════════════════════════════════════════════════ */
 
 ;(() => {
   const LABEL = 'wb-ui'
+  // 注入层自己的运行时状态（同时暴露到 window.__WB_UI__ 供调试/自诊断读取）
   const state = { hidden: [], sweeps: 0, dismissed: 0, topbar: false }
   window.__WB_UI__ = state
   window.__wbSweep = () => sweep()
   console.info('[wb-ui] injected')
 
-  // ── 开机自诊断：抓 JS 报错 + 按钮表 + 面板是否就位（只写 state\boot-diag.json）──
+  // 类名工具：**只按后缀取元素**。DSH 的 hash 前缀每个版本都会变，写死前缀 = 换版本后静默失效。
+  // 例：bySuffix('frame') 在 alpha.1 上命中 .OSewFq_frame，在 rc.3 上命中 .mP3x-q_frame。
+  const bySuffix = (suffix, root = document) => root.querySelector(`[class*="_${suffix}"]`)
+  const allBySuffix = (suffix, root = document) => Array.from(root.querySelectorAll(`[class*="_${suffix}"]`))
+
+  // ── [A] 开机自诊断：抓 JS 报错 + 按钮表 + 面板是否就位（只写 state\boot-diag.json）──
   // 目的：面板挂不上时不用猜——直接看是脚本报错、还是入口按钮压根没注册。
   if (!Array.isArray(state.errors)) state.errors = []
   window.addEventListener('error', (e) => {
@@ -94,7 +137,9 @@
   }
   window.__wbBootDiag = bootDiag
 
-  // ── 0) 基础样式 ─────────────────────────────────────────────────────
+  // ── [B] 基础样式：顶栏外观 + .wb-hidden 工具类 ────────────────────────────
+  // 注意：这里只放"顶栏自己"的样式；布局改造（侧栏不占位、中列撑满）在 ui\workbench.css，
+  // 因为那份文件带完整注释、便于别人改外观。两边的类名匹配都必须是后缀形式。
   const style = document.createElement('style')
   style.id = 'wb-ui-hide-style'
   style.textContent = `
@@ -195,7 +240,9 @@
   })()
   const DEFAULT_PANEL = WANT_PANEL || 'Harness会话'
 
-  // 侧栏入口行（类名形如 `xxx_panelRow`），排除我们自己的顶栏按钮
+  // ── [D] 入口发现：原侧栏里每个入口行 → { label, el } ────────────────────────
+  // 类名形如 `hash_panelRow`（后缀固定）。**排除我们自己顶栏里的按钮**，
+  // 否则顶栏按钮会被当成"原版入口"再扫一遍，越扫越乱。
   const scanSidebarEntries = () => {
     const rows = Array.from(document.querySelectorAll('[class*="_panelRow"]'))
       .filter((el) => !el.closest('#wb-topbar'))
@@ -220,6 +267,8 @@
     return btn ? { label, el: btn, entry: label, panelTab: PANEL_TAB_HINTS[label] } : null
   }
 
+  // 发现结果 → 左右两栏布局。LEFT_ORDER/RIGHT_ORDER 只管顺序与左右；
+  // 名单外的入口一律追加到左边末尾 —— 这就是"装新插件不用改代码"的实现点。
   const planTabs = () => {
     const entries = scanSidebarEntries()
     const byLabel = new Map(entries.map((e) => [e.label, e]))
@@ -375,6 +424,8 @@
     state.reserved = h
   }
 
+  // ── [F] 布局：把原侧栏藏掉 → 建顶栏 → 给 body 让出 46px ──────────────────
+  // 只"藏"不禁用：禁用一个提供服务的插件（如 ui-workspace）会让整页 pending。
   const placeTopbar = () => {
     // 整条侧栏链路都藏掉（只藏、不禁用插件——禁用一个提供服务的插件会让整页崩）
     const chain = findSidebarChain()
@@ -409,7 +460,7 @@
     btn.click()
     markActive(DEFAULT_PANEL)
     setTimeout(() => {
-      const center = document.querySelector('.OSewFq_centerCol')
+      const center = bySuffix('centerCol')
       state.clickLog.push({
         t: Date.now(),
         after: true,
@@ -457,10 +508,11 @@
   }
   window.__wbSnapshot = snapshot
 
-  // 布局兜底：如果 3 秒后中列还没吃满宽度，就用内联样式硬掰（grid → flex）
+  // 布局兜底：CSS 已经用后缀选择器做了同样的事，这里只是"CSS 没生效时的保险"。
+  // 判断依据是**中列实际宽度**，不依赖任何类名前缀。
   const forceLayout = () => {
-    const frame = document.querySelector('.OSewFq_frame')
-    const center = document.querySelector('.OSewFq_centerCol')
+    const frame = bySuffix('frame')
+    const center = bySuffix('centerCol')
     if (!frame || !center) return false
     if (center.getBoundingClientRect().width > window.innerWidth * 0.7) {
       state.layoutOk = true
@@ -472,9 +524,8 @@
     center.style.setProperty('width', 'auto', 'important')
     center.style.setProperty('max-width', 'none', 'important')
     center.style.setProperty('min-width', '0', 'important')
-    for (const cls of ['.OSewFq_sidebarCol', '.OSewFq_rightbarCol', '.OSewFq_handle']) {
-      const el = document.querySelector(cls)
-      if (el) el.style.setProperty('display', 'none', 'important')
+    for (const suffix of ['sidebarCol', 'rightbarCol', 'handle']) {
+      for (const el of allBySuffix(suffix)) el.style.setProperty('display', 'none', 'important')
     }
     state.layoutForced = center.getBoundingClientRect().width
     return true
@@ -506,7 +557,7 @@
       pruneSettings()
     maskUnknownMain() // 先裁剪，再导出，导出的结果就是最终可见状态
       snapshot('settings')
-      const content = document.querySelector('.ZCYAFq_overlay')
+      const content = settingsRoot()
       if (content) {
         fetch('/wb-ui/dom', {
           method: 'POST',
@@ -514,7 +565,7 @@
           body: JSON.stringify({ kind: 'html', name: 'settings.html', html: content.outerHTML }),
         }).then(() => console.info('[wb-ui] settings html dumped')).catch(() => {})
       }
-      const closeBtn = document.querySelector('.ZCYAFq_close')
+      const closeBtn = bySuffix('close')
       if (closeBtn && !(location.search + location.hash).includes('keep-settings')) closeBtn.click()
       setTimeout(() => {
         const back = findButton(DEFAULT_PANEL)
@@ -565,8 +616,15 @@
     return null
   }
 
+  // 设置页根节点：优先按后缀找 `_overlay`；万一那个版本没有这东西，
+  // 退回"文字含『设置』的 dialog"——这样换版本也不会让裁剪整段失效。
+  const settingsRoot = () =>
+    bySuffix('overlay') ||
+    Array.from(document.querySelectorAll('[role="dialog"], dialog')).find((d) => /设置/.test(d.textContent || '')) ||
+    null
+
   const pruneSettings = () => {
-    const overlay = document.querySelector('.ZCYAFq_overlay')
+    const overlay = settingsRoot()
     if (!overlay) return
     let hidden = 0
     for (const el of overlay.querySelectorAll('div[class*="_title"], div[class*="_settingTitle"]')) {
@@ -576,7 +634,7 @@
       if (row) { row.classList.add('wb-hidden'); hidden += 1 }
     }
     // 直接遍历设置区里的每一行，按“行文本以标题开头”兜底（有些行没有 _row 类名）
-    const section = overlay.querySelector('.JZe3aa_section') || overlay.querySelector('.ZCYAFq_options')
+    const section = bySuffix('section', overlay) || bySuffix('options', overlay)
     if (section) {
       for (const child of section.children) {
         const text = (child.textContent || '').replace(/\s+/g, ' ').trim()
@@ -587,11 +645,11 @@
     // 注意：[data-slot=settings.general.item] 只有一个，且包住整个通用设置区，
     // 绝不能按它的文字判断——那会把整块内容一起藏掉（踩过）。逐项隐藏只靠上面的标题匹配。
 
-    for (const cell of overlay.querySelectorAll('.ZCYAFq_navCell')) {
+    for (const cell of allBySuffix('navCell', overlay)) {
       const text = (cell.textContent || '').replace(/\s+/g, ' ').trim()
       cell.classList.toggle('wb-hidden', !KEEP_NAV.includes(text))
     }
-    for (const actions of overlay.querySelectorAll('.ZCYAFq_actions')) {
+    for (const actions of allBySuffix('actions', overlay)) {
       actions.classList.add('wb-hidden') // “打开配置文件”，工作台用不上
     }
     state.settingsHidden = hidden
@@ -621,7 +679,7 @@
   // 6 秒后无论如何都放开，避免面板异常时整块区域永久空白。
   const bootAt = Date.now()
   const maskUnknownMain = () => {
-    const center = document.querySelector('.OSewFq_centerCol')
+    const center = bySuffix('centerCol')
     if (!center) return
     const ours = center.querySelector('[data-wb-panel]')
     if (ours) {
@@ -642,6 +700,15 @@
     state.mainMasked = true
   }
 
+  // ── [J] 启动：一条时间线，不要随意改顺序 ──────────────────────────────────
+  //  0ms     注入样式、读裁剪白名单、开始关「预览版说明」弹窗、第一轮 sweep（只清 toast）
+  //  1.6s    拍"改造前"的 DOM 快照（诊断用）
+  //  2.2s    藏侧栏 + 建顶栏 + 布局兜底 + sweep   ← 关键一步
+  //  3.4s    拍"改造后"快照
+  //  150/450/900/1800/3000ms  反复 sweep + 布局兜底 + openDefault()
+  //          （React 会重渲染，单次操作不可靠；openDefault 只在落地页才切面板）
+  //  4.6s    写 boot-diag.json（面板结果 + 类名探测 + 报错）
+  //  每 2.5s 兜底轮询：sweep + refreshTopbar + watchSettings
   const boot = () => {
     attachStyle()
     // 标题双保险：注入层已经改写了 <title>，这里再设一次（SPA 可能自己改标题）
