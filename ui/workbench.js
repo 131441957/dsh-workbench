@@ -155,8 +155,19 @@
   // 装/卸插件都不需要再改这个文件（最初把 4 个按钮写死，每装一个新插件都得改代码）。
   const LEFT_ORDER = ['Harness会话', '插件']  // 左边固定顺序；没列到的一律排在左边末尾
   const RIGHT_ORDER = ['状态', '设置']         // 右边，顺序即显示顺序
-  const DEFAULT_PANEL = 'Harness会话'
   const PANEL_TAB_HINTS = { 状态: 'services' } // 点这个入口时顺带把面板内部标签切到哪个
+  // 默认打开哪个面板：地址栏可以指定，例如 #wb-panel=插件（token 用完会重定向到 /，
+  // query 会被剥掉、hash 会保留，所以深链接必须用 hash）
+  const WANT_PANEL = (() => {
+    try {
+      const fromHash = new URLSearchParams(String(location.hash || '').replace(/^#/, '')).get('wb-panel')
+      const fromQuery = new URLSearchParams(location.search).get('panel')
+      return String(fromHash || fromQuery || '').trim()
+    } catch {
+      return ''
+    }
+  })()
+  const DEFAULT_PANEL = WANT_PANEL || 'Harness会话'
 
   // 侧栏入口行（类名形如 `xxx_panelRow`），排除我们自己的顶栏按钮
   const scanSidebarEntries = () => {
@@ -352,7 +363,8 @@
     if (defaulted) return
     // 注意：必须用 textContent 而不是 innerText —— 遮罩用 visibility:hidden 藏主区，
     // 被藏元素没有 innerText，用 innerText 判断会永远为假（曾因此点击永不触发、面板挂不上）。
-    if (!/选择工作区|探索未至之境/.test(document.body ? document.body.textContent : '')) return
+    // 例外：地址栏明确指定了 ?panel=xxx 时不看落地页文字，直接切过去（深链接/收藏要靠它）。
+    if (!WANT_PANEL && !/选择工作区|探索未至之境/.test(document.body ? document.body.textContent : '')) return
     const btn = findButton(DEFAULT_PANEL)
     if (!btn) {
       state.clickLog.push({ t: Date.now(), found: false })

@@ -24,6 +24,8 @@
 - **工作台插件**：`dsh-wb-api-browser`（状态面板 key `wb-api`：宿主服务/前端槽位/profile 分层/主驾状态 **+ 独立「工作台插件」面板 key `wb-plugins`**，用 `h(Panel,{fixedTab:'plugins',hideTabs:true})` 复用同一份 Panel）、`dsh-wb-sessions`（Harness 会话：列表/历史/发送 + 标题 + 工作区分组）、`dsh-wb-ui`（webui 注入层）、`dsh-workbench-bridge`（主驾侧接入层）。**`dsh-wb-web` 已于 2026-10-27 整体卸载**（它只是当初用来测工作台的样板能力出口，`/wb-web/search` 与主驾 `web_search` 重复）：profile 里的依赖/bundle 已删、node_modules 链接已剪、插件目录已从仓库移除（`/wb-web/*` 现在 404），源码仍在 git 历史与旧快照里，要恢复就 `git checkout` 旧版本 + `wb.py plugins add`。
 - **UI 现状**：左栏已改**顶栏**（纯 CSS：`.OSewFq_frame` 强制 flex、隐藏 sidebar/rightbar/handle、centerCol 撑满；`body{padding-top:46px}`）。**顶栏不写死**（2026-10-27 改）：`ui\workbench.js` 动态扫描侧栏入口行（`[class*="_panelRow"]`）生成按钮，规则是 `LEFT_ORDER=['Harness会话','插件']`、`RIGHT_ORDER=['状态','设置']`、**名单里没有的入口自动排到左边末尾**——所以装/卸插件都不需要改工作台代码。兜底：`设置`不是面板行，名单里的名字扫不到行时按文字 `findButton` 补上。面板根节点带 `data-wb-panel`，`maskUnknownMain()` 在面板就位前遮罩主区，避免「探索未至之境」闪一下（6 秒超时保护）。
 - **装插件的标准姿势**（2026-10-27 起）：`seeds\plugin-template\` 是现成模板，复制改名 → `wb.py plugins add <绝对路径>` → `wb.py restart`，顶栏自动出现新面板。**`plugins add` 必须传绝对路径**：profile 里写的是 `link:<路径>`，而 link 是相对 profile 目录解析的，传相对路径会装成一个不存在的目录（install 直接失败）。详见 `seeds\plugin-template\README.md`。
+- **插件备注**（2026-10-27 新增）：顶栏「插件」面板里每个插件下面有一条备注，点一下就地编辑（`Ctrl+Enter` 保存 / `Esc` 取消 / 清空即删除），过滤框也能按备注内容搜。存 `state\plugin-notes.json`（UTF-8，先写 .tmp 再 rename），接口 `GET/POST /wb-api/notes`；该文件**已加进 `wb.py backup` 的 state 白名单**（`BACKUP_STATE_FILES`），别让它在快照里漏掉。
+- **面板深链接**：地址栏 `#wb-panel=插件` 可直接打开指定面板（`ui\workbench.js` 的 `WANT_PANEL`）。必须用 **hash**——token 用完会重定向到 `/`，query 会被剥掉。
 - **会话面板**：290px 左栏；首部三行（标题/实时状态/过滤+排序）；**按工作区分组**（默认排序=按工作区）：分组键是 `cwd`，组头显示工作区名——名字来自宿主新增接口 `/wb-sessions/workspaces`（只读主驾 `storages\workspace.json`，`default-workspace` 按原版规则显示成「默认工作区」），取不到才退回目录末段；可折叠、组头加粗+胶囊计数+分隔线；行缩进 20px、运行中圆点发光；**行标题来自桥透出的 `summary.projections.values.title`**（`/wb-sessions/list` 已带 `title`）。⚠️ 曾经分组键误用 `sessionLabel()`（优先标题），导致每条会话自成一组、组头全是标题——已修，回归测试 `tools\test-sessions-group.mjs`。
 - **设置页**：只留 语言 / 外观 / 字号大小；其余按标题文字隐藏（`pruneSettings()`，正则 `[\w-]+_(row|group|setting)`，别按 `[data-slot]` 判断——它包住整个区域）。
 - **备份**：`wb.py backup --note "…"` → `backups\snapshot-<时间>.zip`（含 tools/plugins/seeds/docs/ui + config.json + home/profiles/bench + home/storages/*.json；**不收** credentials/app/state/logs）。现有 5 份快照全保留 + 运行时备份 `app-0.2.1-alpha.1-*`（1.69 GB，`rollback` 秒回）。
@@ -44,6 +46,7 @@ curl  http://127.0.0.1:59430/wb-sessions/workspaces  # 工作区注册表（分�
 # 页面自报结构：POST /wb-ui/dom → state\dom-snapshot.json；控制台 __WB_UI__ / __wbSweep()
 # 开机自诊断：每次加载页面 4.6 秒后自动写 state\boot-diag.json（按钮表 / hasPanel / clickLog / JS 报错 / console.error / **discovered 侧栏发现 / topbarTabs 顶栏按钮**）
 node E:\DSH-WORKBENCH\tools\test-sessions-group.mjs   # 分组回归（工作区 vs 标题）
+node E:\DSH-WORKBENCH\tools\test-plugin-notes.mjs     # 插件备注的行数据形状（note 字段/筛选/其它标签不受影响）
 python E:\DSH-WORKBENCH\tools\wb.py plugins list        # 工作台插件（bundle/linked/spec）
 python E:\DSH-WORKBENCH\tools\wb.py plugins remove <名> # 卸载：删依赖+bundle → pnpm install
 ```

@@ -72,6 +72,35 @@ window.__ModuleLoader__.load({
       },
       key: { fontFamily: 'ui-monospace, Consolas, monospace', fontWeight: 600 },
       dim: { color: 'var(--dsw-alias-label-secondary)', fontSize: 11 },
+      noteWrap: { marginTop: 5, cursor: 'text' },
+      noteText: { fontSize: 11.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.55 },
+      noteEmpty: { fontSize: 11, color: 'var(--dsw-alias-label-secondary)', opacity: 0.75 },
+      noteEditor: {
+        width: '100%',
+        minHeight: 46,
+        maxHeight: 160,
+        resize: 'vertical',
+        marginTop: 3,
+        padding: '4px 6px',
+        fontSize: 11.5,
+        borderRadius: 6,
+        border: '1px solid var(--dsw-alias-border-secondary)',
+        background: 'var(--dsw-alias-bg-base)',
+        color: 'var(--dsw-alias-label-primary)',
+        font: 'inherit',
+        boxSizing: 'border-box',
+      },
+      noteBtns: { display: 'flex', gap: 6, alignItems: 'center', marginTop: 4 },
+      noteBtn: {
+        fontSize: 11,
+        padding: '2px 8px',
+        borderRadius: 6,
+        border: '1px solid var(--dsw-alias-border-secondary)',
+        background: 'transparent',
+        color: 'var(--dsw-alias-label-primary)',
+        cursor: 'pointer',
+      },
+      noteErr: { fontSize: 11, color: 'var(--dsw-alias-label-error, #d33)' },
       notice: { padding: 16, fontSize: 12, color: 'var(--dsw-alias-label-secondary)' },
       err: { padding: 12, fontSize: 12, color: 'var(--dsw-alias-label-error, #d33)' },
     }
@@ -92,6 +121,76 @@ window.__ModuleLoader__.load({
       )
     }
 
+    // 行构造：纯函数，页面调它，离线单测也调它（tools\test-plugin-notes.mjs）。
+    // 插件行额外带 `note` 字段（空字符串=没有备注），没有 note 字段的行不是插件行。
+    function buildRows(tab, data, needle) {
+      const live = data.live
+      const build = data.build
+      const status = data.status
+      const plugins = data.plugins
+      const notes = data.notes || {}
+      if (tab === 'plugins') {
+        const list = (plugins && plugins.plugins) || []
+        return list
+          .filter((p) => {
+            if (!needle) return true
+            const note = notes[p.name] || ''
+            return p.name.toLowerCase().includes(needle) || note.toLowerCase().includes(needle)
+          })
+          .map((p) => ({
+            id: `plugin:${p.name}`,
+            head: p.name,
+            meta: [
+              p.version ? `v${p.version}` : '无版本',
+              p.inBundles ? '已登记' : '未登记',
+              p.linked ? '已链接' : '缺 node_modules',
+            ].join(' · '),
+            body: `依赖声明: ${p.spec}`,
+            note: notes[p.name] || '',
+            extra: !p.inBundles || !p.linked ? '⚠️ 这条不会生效：' + (!p.inBundles ? '没加进 bundles；' : '') + (!p.linked ? 'node_modules 里找不到；' : '') : '',
+          }))
+      }
+      if (tab === 'services') {
+        const list = (live && live.services) || []
+        return list
+          .filter((s) => !needle || s.key.toLowerCase().includes(needle) || (s.description || '').toLowerCase().includes(needle))
+          .map((s) => ({
+            id: s.key,
+            head: s.key,
+            meta: `${s.methodCount} 个方法`,
+            body: s.description || '',
+          }))
+      }
+      if (tab === 'slots') {
+        const list = (live && live.slots) || []
+        return list
+          .filter((s) => !needle || s.name.toLowerCase().includes(needle) || (s.purpose || '').toLowerCase().includes(needle))
+          .map((s) => ({
+            id: s.name,
+            head: s.name,
+            meta: `${s.kind} · ${s.scope}`,
+            body: s.purpose || '',
+            extra: s.taken && s.taken.length ? `已被占用: ${s.taken.slice(0, 6).join(', ')}` : '',
+          }))
+      }
+      if (tab === 'build') {
+        const layers = (build && build.layers) || []
+        return layers.map((l) => ({
+          id: l.layer,
+          head: l.layer,
+          meta: `${l.rows.length} 行`,
+          body: l.rows.map((r) => (r.disabled ? `~~${r.id}~~` : r.id)).join(', '),
+        }))
+      }
+      if (!status) return []
+      const m = status.memory || {}
+      return [
+        { id: 'ports', head: '主驾端口', meta: '', body: JSON.stringify((status.mainHarness || {}).ports || []) },
+        { id: 'memory', head: '记忆条数', meta: '', body: Object.entries(m).map(([k, v]) => `${k}=${v}`).join(' / ') },
+        { id: 'collected', head: '快照时间', meta: '', body: status.collectedAt || '' },
+      ]
+    }
+
     function Panel(props) {
       const fixedTab = props && props.fixedTab
       const hideTabs = Boolean(props && props.hideTabs)
@@ -103,6 +202,10 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState('')
       const [query, setQuery] = useState('')
       const [expanded, setExpanded] = useState('')
+      const [notes, setNotes] = useState({})   // 插件备注：{ 包名: 备注文字 }
+      const [editing, setEditing] = useState('') // 正在编辑备注的行 id
+      const [draft, setDraft] = useState('')
+      const [noteErr, setNoteErr] = useState('')
 
       useEffect(() => {
         // 允许外部（顶栏）切到指定标签页：window.__wbApiSelect('plugins')
@@ -122,17 +225,19 @@ window.__ModuleLoader__.load({
         let alive = true
         ;(async () => {
           try {
-            const [l, b, s, p] = await Promise.all([
+            const [l, b, s, p, n] = await Promise.all([
               getJson('/wb-api/live').catch(() => null),
               getJson('/wb-api/build').catch(() => null),
               getJson('/wb-api/status').catch(() => null),
               getJson('/wb-api/plugins').catch(() => null),
+              getJson('/wb-api/notes').then((r) => (r && r.notes) || {}).catch(() => ({})),
             ])
             if (!alive) return
             setLive(l)
             setBuild(b)
             setStatus(s)
             setPlugins(p)
+            setNotes(n || {})
             if (!l && !b && !s) setError('工作台还没有基线数据：先跑 wb.py api')
           } catch (e) {
             if (alive) setError(String(e && e.message ? e.message : e))
@@ -145,63 +250,29 @@ window.__ModuleLoader__.load({
 
       const needle = query.trim().toLowerCase()
 
-      const rows = useMemo(() => {
-        if (tab === 'plugins') {
-          const list = (plugins && plugins.plugins) || []
-          return list
-            .filter((p) => !needle || p.name.toLowerCase().includes(needle))
-            .map((p) => ({
-              id: `plugin:${p.name}`,
-              head: p.name,
-              meta: [
-                p.version ? `v${p.version}` : '无版本',
-                p.inBundles ? '已登记' : '未登记',
-                p.linked ? '已链接' : '缺 node_modules',
-              ].join(' · '),
-              body: `依赖声明: ${p.spec}`,
-              extra: !p.inBundles || !p.linked ? '⚠️ 这条不会生效：' + (!p.inBundles ? '没加进 bundles；' : '') + (!p.linked ? 'node_modules 里找不到；' : '') : '',
-            }))
+      const rows = useMemo(
+        () => buildRows(tab, { live, build, status, plugins, notes }, needle),
+        [tab, live, build, status, plugins, notes, needle],
+      )
+
+      // 保存备注：空备注 = 删除这条
+      const saveNote = async (name, text) => {
+        setNoteErr('')
+        try {
+          const res = await fetch('/wb-api/notes', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ name, note: text }),
+          })
+          const body = await res.json().catch(() => ({}))
+          if (!res.ok || body.ok === false) throw new Error(body.error || `HTTP ${res.status}`)
+          setNotes(body.notes || {})
+          setEditing('')
+          setDraft('')
+        } catch (e) {
+          setNoteErr(String(e && e.message ? e.message : e))
         }
-        if (tab === 'services') {
-          const list = (live && live.services) || []
-          return list
-            .filter((s) => !needle || s.key.toLowerCase().includes(needle) || (s.description || '').toLowerCase().includes(needle))
-            .map((s) => ({
-              id: s.key,
-              head: s.key,
-              meta: `${s.methodCount} 个方法`,
-              body: s.description || '',
-            }))
-        }
-        if (tab === 'slots') {
-          const list = (live && live.slots) || []
-          return list
-            .filter((s) => !needle || s.name.toLowerCase().includes(needle) || (s.purpose || '').toLowerCase().includes(needle))
-            .map((s) => ({
-              id: s.name,
-              head: s.name,
-              meta: `${s.kind} · ${s.scope}`,
-              body: s.purpose || '',
-              extra: s.taken && s.taken.length ? `已被占用: ${s.taken.slice(0, 6).join(', ')}` : '',
-            }))
-        }
-        if (tab === 'build') {
-          const layers = (build && build.layers) || []
-          return layers.map((l) => ({
-            id: l.layer,
-            head: l.layer,
-            meta: `${l.rows.length} 行`,
-            body: l.rows.map((r) => (r.disabled ? `~~${r.id}~~` : r.id)).join(', '),
-          }))
-        }
-        if (!status) return []
-        const m = status.memory || {}
-        return [
-          { id: 'ports', head: '主驾端口', meta: '', body: JSON.stringify((status.mainHarness || {}).ports || []) },
-          { id: 'memory', head: '记忆条数', meta: '', body: Object.entries(m).map(([k, v]) => `${k}=${v}`).join(' / ') },
-          { id: 'collected', head: '快照时间', meta: '', body: status.collectedAt || '' },
-        ]
-      }, [tab, live, build, status, needle])
+      }
 
       const counts = {
         plugins: (plugins && plugins.plugins && plugins.plugins.length) || 0,
@@ -259,6 +330,71 @@ window.__ModuleLoader__.load({
                     h('span', { style: styles.key }, r.head),
                     r.meta ? h('span', { style: styles.dim }, r.meta) : null,
                   ),
+                  // 插件备注：点一下就地编辑，Ctrl+Enter 保存，Esc 取消，清空即删除
+                  r.note !== undefined
+                    ? h(
+                        'div',
+                        {
+                          style: styles.noteWrap,
+                          title: r.note ? '点击编辑备注' : '点击给这个插件加备注',
+                          onClick: (e) => {
+                            e.stopPropagation()
+                            if (editing === r.id) return
+                            setEditing(r.id)
+                            setDraft(r.note || '')
+                            setNoteErr('')
+                          },
+                        },
+                        editing === r.id
+                          ? h(
+                              'div',
+                              null,
+                              h('textarea', {
+                                style: styles.noteEditor,
+                                value: draft,
+                                autoFocus: true,
+                                placeholder: '这个插件是干嘛的、为什么装它…（Ctrl+Enter 保存，Esc 取消）',
+                                onChange: (e) => setDraft(e.target.value),
+                                onClick: (e) => e.stopPropagation(),
+                                onKeyDown: (e) => {
+                                  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                                    e.preventDefault()
+                                    saveNote(r.head, draft)
+                                  }
+                                  if (e.key === 'Escape') {
+                                    e.preventDefault()
+                                    setEditing('')
+                                    setDraft('')
+                                  }
+                                },
+                              }),
+                              h(
+                                'div',
+                                { style: styles.noteBtns },
+                                h(
+                                  'button',
+                                  {
+                                    type: 'button',
+                                    style: styles.noteBtn,
+                                    onClick: (e) => { e.stopPropagation(); saveNote(r.head, draft) },
+                                  },
+                                  '保存',
+                                ),
+                                h(
+                                  'button',
+                                  {
+                                    type: 'button',
+                                    style: styles.noteBtn,
+                                    onClick: (e) => { e.stopPropagation(); setEditing(''); setDraft(''); setNoteErr('') },
+                                  },
+                                  '取消',
+                                ),
+                                noteErr ? h('span', { style: styles.noteErr }, noteErr) : null,
+                              ),
+                            )
+                          : h('div', { style: r.note ? styles.noteText : styles.noteEmpty }, r.note || '＋ 加备注'),
+                      )
+                    : null,
                   expanded === r.id || needle
                     ? h('div', { style: { marginTop: 4 } }, r.body, r.extra ? h('div', { style: styles.dim }, r.extra) : null)
                     : null,
@@ -275,6 +411,7 @@ window.__ModuleLoader__.load({
 
     return {
       inject: ['slots'],
+      __test__: { buildRows },
       apply(ctx) {
         ctx.slots.inject('sidebar.panellist', () =>
           ctx.slots.register(

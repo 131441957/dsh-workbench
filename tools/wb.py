@@ -1057,6 +1057,8 @@ def cmd_info() -> int:
 
 BACKUP_DIRS = ["tools", "plugins", "seeds", "docs", "ui"]
 BACKUP_FILES = ["config.json", ".gitignore"]
+# state/ 整体不进快照（临时快照、日志、token 之类），但这个文件是用户亲手写的插件备注，必须留住
+BACKUP_STATE_FILES = ["plugin-notes.json"]
 BACKUP_PROFILE_FILES = ["package.json", "cordis.patch.yml", "pnpm-lock.yaml", "pnpm-workspace.yaml"]
 
 
@@ -1093,6 +1095,10 @@ def _backup_entries() -> list[tuple[Path, str]]:
     if storages.exists():
         for p in sorted(storages.glob("*.json")):
             out.append((p, f"home/storages/{p.name}"))
+    for name in BACKUP_STATE_FILES:
+        p = STATE_DIR / name
+        if p.exists():
+            out.append((p, f"state/{name}"))
     return out
 
 
