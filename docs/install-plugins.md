@@ -88,7 +88,28 @@ python tools\wb.py fix-ui                        # 界面没出现入口时，�
 | 装的时候说要 `--keep-nav` | 该插件在设置页加了分区；不登记的话分区会被界面裁剪掉。`install-plugin --keep-nav <标题>` |
 | 装完要我重启主 harness？ | **不需要**。工作台插件只影响工作台；只有主驾侧的接入层（`attach/detach`）才要重启主 harness |
 
-## 7. 插件装在哪（为什么不会污染主 harness）
+## 7. 权限模式的影响（agent 替你操作时）
+
+工作台**不依赖 agent**，它自己跑得好好的；这里说的是「让 agent 帮你装插件 / 改界面」时能不能成。
+
+| 操作 | `workspace-write`（工作区内修改） | 说明 |
+|---|---|---|
+| 打开工作台页面、看面板 | ✅ | 与沙箱无关 |
+| agent 调 `workbench_*` 工具（status/api/plugins/call） | ✅ | 工具在 harness 宿主进程里跑，走 localhost HTTP；沙箱只管 shell 的文件访问 |
+| `wb.py status` / `info` / `plugins list` | ✅ | 只读命令不受限 |
+| **`install-plugin` / `uninstall-plugin` / `plugin-update`** | ❌（多数情况） | 要写 `<工作台根>\home\profiles\bench\**` 与 `state\**`；若工作区不包含工作台根，会被拒 |
+| 改 `ui\` / `plugins\` 源码、`sync-bed` / `backup` / `restore` | ❌（多数情况） | 同上，都是工作区外写 |
+
+依据：`dsh-bash-sandbox` 的说明写的是「使其**文件访问**受到限制……**网络访问和进程可见性不在其保证范围内**」。
+所以"用"没问题，"改"要看工作区在哪。
+
+**想让 agent 在 `workspace-write` 下也能装插件，三种做法（由省事到麻烦）：**
+
+1. 把会话的工作区设为**工作台根目录**（`<工作台根>`），这样写 `home\ state\ ui\ plugins\` 都在工作区内 → 全部可用
+2. 需要装插件时另开一个工作区在工作台根的会话
+3. 该次操作临时提升到 `danger-full-access`（最省事也最危险，不推荐长期这么用）
+
+## 8. 插件装在哪（为什么不会污染主 harness）
 
 - 装进工作台自己的 profile：`home\profiles\bench\package.json`（`link:` 本地目录 / npm 版本号）
 - 依赖落在 `home\profiles\bench\node_modules\`
