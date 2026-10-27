@@ -93,6 +93,24 @@ python tools\probe-ui.py --root E:\WB-<版本>    # 测试床（换成你自己�
 4. `maskUnknownMain()` 在面板就位前藏住主区（避免原版落地页闪一下），6 秒上限
 5. `pruneSettings()` 按叶子标题文字裁剪设置分区，白名单来自 `/wb-ui/config`
 
+### 4.1 插件自带「设置分区」也会变成顶栏按钮（2026-10-27）
+
+插件除了注册 `sidebar.panellist` 当面板，还可能只往**设置页**里加一个分区
+（`settings.section`，例如 `dsh-pet` 的「桌宠配置」）。这种分区原来只能从「设置 → 左侧导航」
+进去，不在顶栏。现在：
+
+- 打开过一次设置后，`discoverSettingsSections()` 会扫左侧导航（`*_navCell`），
+  把**不在内置名单**（`BUILTIN_SETTINGS_NAV`：通用设置 / 模型 / 内置插件 / Agent 预设 …）里的
+  标题当成"插件分区"，**自动加一个顶栏按钮**（`data-wb-kind="settings"`）
+- 点它 = 打开设置并切到该分区（`openSettingsSection()`）
+- 同时把这些分区从设置左侧导航里**隐掉**（提到顶栏了，不再重复列）
+- 发现结果会 POST 回 `/wb-ui/config` 落进 `state\ui-config.json`，
+  这样**下次打开页面不用先点设置**也有按钮
+
+重名的情况（同一插件既有面板又有设置分区，比如「插件市场」）：面板优先，不会出两个按钮。
+换 DSH 版本后如果内置分区改名，见到顶栏多出 `模型`/`模板` 这类按钮，就把它补进
+`BUILTIN_SETTINGS_NAV`。
+
 ## 5. 加一个面板（推荐做法，不用改 ui）
 
 ```powershell

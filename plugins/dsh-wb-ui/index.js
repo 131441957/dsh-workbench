@@ -27,7 +27,7 @@
  *   curl http://127.0.0.1:59430/wb-ui           → uiDir 必须是**这一份**的 ui 目录
  *   wb.py status / python tools\test-http.py     → 17 项里包含 /wb-ui 认领与页面注入检查
  * ══════════════════════════════════════════════════════════════════════════ */
-import { readFileSync, statSync, writeFileSync } from 'node:fs'
+import { readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -146,11 +146,53 @@ export function apply(ctx) {
     // 界面裁剪的白名单 + 端口：装插件时由 wb.py install-plugin 自动写入 state\ui-config.json；
     // 端口来自 config.json（客户机上 59430 可能被占，工作台会换端口）
     if (url.pathname === '/wb-ui/config') {
+      const cfgPath = join(WB_ROOT, 'state', 'ui-config.json')
       let cfg = {}
       try {
-        cfg = JSON.parse(readFileSync(join(WB_ROOT, 'state', 'ui-config.json'), 'utf8'))
+        cfg = JSON.parse(readFileSync(cfgPath, 'utf8'))
       } catch {
         cfg = {}
+      }
+      // POST = 页面把**自动发现**到的插件设置分区回写（客户端发现比服务端猜标题可靠：
+      // dsh-pet 的分区标题 install-plugin 就没猜出来，页面上却看得到）。
+      if (req.method === 'POST') {
+        const chunks = []
+        let total = 0
+        try {
+          for await (const chunk of req) {
+            total += chunk.length
+            if (total > 1024 * 1024) throw new Error('payload too large')
+            chunks.push(chunk)
+          }
+        } catch { /* 读失败就当空报告 */ }
+        const raw = Buffer.concat(chunks).toString('utf8')
+        let incoming = []
+        try {
+          const parsed = JSON.parse(raw || '{}')
+          incoming = Array.isArray(parsed.sections) ? parsed.sections : []
+        } catch { incoming = [] }
+        const clean = [...new Set(incoming.filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim()))]
+        const keepNav = Array.isArray(cfg.keepNav) ? cfg.keepNav.slice() : []
+        let added = 0
+        for (const t of clean) {
+          if (!keepNav.includes(t)) { keepNav.push(t); added += 1 }
+        }
+        if (added) {
+          cfg.keepNav = keepNav
+          try {
+            // 先写 .tmp 再 rename：半个 JSON 会让界面下次读配置直接崩溃
+            const tmp = `${cfgPath}.tmp`
+            writeFileSync(tmp, JSON.stringify(cfg, null, 2) + '\n', 'utf8')
+            renameSync(tmp, cfgPath)
+          } catch (error) {
+            res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+            res.end(JSON.stringify({ ok: false, error: String(error?.message ?? error) }))
+            return
+          }
+        }
+        res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        res.end(JSON.stringify({ ok: true, added, keepNav }))
+        return
       }
       let port = 59430
       try {

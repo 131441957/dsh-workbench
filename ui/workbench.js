@@ -125,8 +125,12 @@
         topbarTabs: Array.from(document.querySelectorAll('#wb-topbar button.wb-tab')).map((b) => b.textContent),
         pluginSectionTabs: ((state.uiConfig && state.uiConfig.extra) || []).slice(0, 12),
         selftestHit: state.selftestHit || null,
+        selftestInfo: state.selftestInfo || null,
         selftestRan: Boolean(state.selftestRan),
         settingsNavCells: allBySuffix('navCell').map((c) => (c.textContent || '').replace(/\s+/g, ' ').trim()).slice(0, 16),
+        settingsNavVisible: allBySuffix('navCell')
+          .filter((c) => !c.classList.contains('wb-hidden'))
+          .map((c) => (c.textContent || '').replace(/\s+/g, ' ').trim()).slice(0, 16),
         discovered: scanSidebarEntries().map((e) => e.label),
         errors: state.errors.slice(0, 12),
         consoleErrors: (state.consoleErrors || []).slice(0, 12),
@@ -288,6 +292,42 @@
     return out
   }
 
+  // 内置设置分区：这些**留在设置里**，不要提到顶栏（提到顶栏的是插件加的分区）。
+  // 名单按 0.2.1-alpha.1 实测抄的（2026-10-27：`模板` / `内置插件` / `Agent 预设`（中间是半角空格）/
+  // `通用设置`）。换 DSH 版本后如果内置项改名，这里不匹配的会被当成插件分区提到顶栏——
+  // 不至于坏，但顶栏会多出按钮，见到就补一行。
+  const BUILTIN_SETTINGS_NAV = ['通用设置', '模型', '内置插件', 'Agent 预设', '权限', '语言', '外观', '字号大小']
+
+  // 客户端自动发现：设置页左侧导航里出现、但不在内置名单里的分区 = 插件加的分区
+  // → 立刻当成顶栏入口（这样装带设置分区的插件**不需要任何注册**，
+  //   也不需要 wb.py 去猜标题；2026-10-27 之前靠 install-plugin 写 ui-config，猜不到就丢）。
+  const discoverSettingsSections = (overlay) => {
+    const titles = allBySuffix('navCell', overlay)
+      .map((c) => (c.textContent || '').replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+    const cfg = state.uiConfig || (state.uiConfig = { extra: [], keepNav: [] })
+    let changed = false
+    for (const t of titles) {
+      if (BUILTIN_SETTINGS_NAV.includes(t)) continue
+      if (!cfg.extra.includes(t)) { cfg.extra.push(t); changed = true }
+      if (!cfg.keepNav.includes(t)) cfg.keepNav.push(t)
+    }
+    if (changed) {
+      refreshTopbar()
+      // 落盘：下次打开页面**不用再先点一次设置**也能有这个顶栏按钮。
+      // 服务端只是往 keepNav 里加标题（POST /wb-ui/config），失败也无所谓——
+      // 下次打开设置时会再发现一次。
+      try {
+        fetch('/wb-ui/config', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ sections: cfg.extra }),
+        }).catch(() => {})
+      } catch { /* 忽略 */ }
+    }
+    return titles
+  }
+
   const planTabs = () => {
     const entries = scanSidebarEntries()
     const byLabel = new Map(entries.map((e) => [e.label, e]))
@@ -374,6 +414,7 @@
       // 优先在设置容器里找；找不到就退到全文档（有些版本导航栏不在 overlay 内部）
       const cells = (overlay ? allBySuffix('navCell', overlay) : []).concat()
       const pool = cells.length ? cells : allBySuffix('navCell')
+      state.selftestInfo = { attempt, hasOverlay: Boolean(overlay), pool: pool.length, title }
       const cell = pool.find((c) => (c.textContent || '').trim() === title)
       if (cell) {
         cell.click()
@@ -409,6 +450,9 @@
     btn.type = 'button'
     btn.className = 'wb-tab'
     btn.dataset.wbTab = tab.label
+    // 区分"面板入口"和"插件设置分区入口"：两者外观一样，但点击行为不同，
+    // 自检/调试需要能分别选到（同名时尤其重要——插件市场既是面板又是设置分区）。
+    btn.dataset.wbKind = tab.kind || 'panel'
     btn.textContent = tab.label
     btn.addEventListener('click', () => clickTab(tab))
     return btn
@@ -675,6 +719,8 @@
   const pruneSettings = () => {
     const overlay = settingsRoot()
     if (!overlay) return
+    // 每次打开设置都扫一遍左侧导航：插件新加的分区立刻进顶栏（不需要任何注册）
+    const navTitles = discoverSettingsSections(overlay)
     let hidden = 0
     for (const el of overlay.querySelectorAll('div[class*="_title"], div[class*="_settingTitle"]')) {
       const text = (el.textContent || '').trim()
@@ -694,9 +740,14 @@
     // 注意：[data-slot=settings.general.item] 只有一个，且包住整个通用设置区，
     // 绝不能按它的文字判断——那会把整块内容一起藏掉（踩过）。逐项隐藏只靠上面的标题匹配。
 
+    // 插件设置分区已经提到顶栏 → 设置弹层里不再重复列一遍（用户 2026-10-27：
+    // 「这几个插件的设置窗口位置不太好，应该放到顶栏」）。元素只是隐藏，程序化 click
+    // 依然有效，所以顶栏入口点进来照样能切到该分区。
+    const promoted = (state.uiConfig && state.uiConfig.extra) || []
     for (const cell of allBySuffix('navCell', overlay)) {
       const text = (cell.textContent || '').replace(/\s+/g, ' ').trim()
-      cell.classList.toggle('wb-hidden', !KEEP_NAV.includes(text))
+      const hide = !KEEP_NAV.includes(text) || promoted.includes(text)
+      cell.classList.toggle('wb-hidden', hide)
     }
     for (const actions of allBySuffix('actions', overlay)) {
       actions.classList.add('wb-hidden') // “打开配置文件”，工作台用不上
@@ -787,13 +838,38 @@
     // 只用于验证"顶栏入口 → 设置分区"这条链路，正常使用不会触发。
     // 注意：自检模式下只写一次 diag（4.5s），否则首次 4.6s 的那份会先被探针读走、
     // 看不到 selftestHit（2026-10-27 踩过）。
-    const SELFTEST = (location.search + location.hash).includes('wb-selftest=settings')
+    const SELFTEST = (location.search + location.hash).includes('wb-selftest=')
     if (SELFTEST) {
+      const mode = (location.hash.match(/wb-selftest=([a-z]+)/) || [])[1] || 'settings'
       setTimeout(() => {
         state.selftestRan = true
-        const extra = (state.uiConfig && state.uiConfig.extra) || []
-        if (extra.length) openSettingsSection(extra[0])
-      }, 2500)
+        if (mode === 'tab') {
+          // 点**顶栏上那个插件设置按钮**，走真实用户路径
+          const extra = (state.uiConfig && state.uiConfig.extra) || []
+          const bars = Array.from(document.querySelectorAll('#wb-topbar button.wb-tab'))
+          const sectionTabs = bars.filter((b) => b.dataset.wbKind === 'settings')
+          const btn = sectionTabs[0] || bars.find((b) => extra.includes(b.textContent))
+          if (btn) btn.click()
+          return
+        }
+        // mode=settings：点开设置 → 等它渲染 → 找**第一个非内置分区** → 点它
+        const openBtn = findButton('设置')
+        if (openBtn) openBtn.click()
+        setTimeout(() => {
+          const overlay = settingsRoot()
+          const cells = overlay ? allBySuffix('navCell', overlay) : []
+          const hit = cells.find((c) => {
+            const t = (c.textContent || '').replace(/\s+/g, ' ').trim()
+            return t && !BUILTIN_SETTINGS_NAV.includes(t)
+          })
+          if (hit) {
+            const title = (hit.textContent || '').replace(/\s+/g, ' ').trim()
+            hit.click()
+            markActive(title)
+            state.selftestHit = title
+          }
+        }, 1200)
+      }, 2200)
       setTimeout(bootDiag, 4500)
     } else {
       setTimeout(bootDiag, 4600)
