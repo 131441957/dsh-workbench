@@ -1102,6 +1102,190 @@ def cmd_install_plugin(spec: str, keep_nav: str = "", no_restart: bool = False) 
     return 0
 
 
+BRIDGE_PKG = "dsh-workbench-bridge"
+
+
+def bridge_dir() -> Path:
+    return WB_ROOT / "plugins" / BRIDGE_PKG
+
+
+def bridge_is_soft() -> tuple[bool, str]:
+    """桥必须是软依赖：inject 为空 + 用 ctx.get 取服务。硬依赖会把目标 harness 打死。"""
+    index = bridge_dir() / "index.js"
+    if not index.exists():
+        return False, f"找不到 {index}"
+    text = index.read_text(encoding="utf-8", errors="replace")
+    if re.search(r"export\s+const\s+inject\s*=\s*\[\s*\]", text):
+        return True, "inject = []（软依赖）"
+    return False, "没有 export const inject = [] —— 硬依赖会拖垮目标 harness，拒绝安装"
+
+
+def resolve_target_home(arg: str) -> Path:
+    if arg:
+        return Path(arg)
+    try:
+        cfg = json.loads((WB_ROOT / "config.json").read_text(encoding="utf-8"))
+        if cfg.get("home"):
+            return Path(cfg["home"])
+    except Exception:
+        pass
+    return Path(os.environ.get("DSH_HOME") or (Path.home() / ".dsh"))
+
+
+def _profile_manifest(prof: Path) -> dict:
+    # utf-8-sig：目标机的 package.json 可能带 BOM（PowerShell Set-Content 就爱写 BOM）
+    return json.loads((prof / "package.json").read_text(encoding="utf-8-sig"))
+
+
+def _bundles_of(meta: dict) -> list:
+    dsh = meta.get("dsh") if isinstance(meta.get("dsh"), dict) else {}
+    profile = dsh.get("profile") if isinstance(dsh.get("profile"), dict) else {}
+    bundles = profile.get("bundles")
+    return bundles if isinstance(bundles, list) else []
+
+
+def _backup_profile_manifest(prof: Path, tag: str) -> Path:
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    dest = BACKUP_ROOT / f"{tag}-{stamp}"
+    dest.mkdir(parents=True, exist_ok=True)
+    for name in ("package.json", "pnpm-lock.yaml", "cordis.patch.yml"):
+        p = prof / name
+        if p.exists():
+            shutil.copy2(p, dest / name)
+    return dest
+
+
+def _run_profile_install(home: Path, profile: str) -> int:
+    cli = APP_ROOT / "resources" / "runtime" / "cli" / "bin" / "dsh.cmd"
+    if not cli.exists():
+        bad(f"找不到 dsh CLI：{cli}")
+        return 1
+    env = dict(os.environ, DSH_HOME=str(home), DSH_PROFILE=profile)
+    proc = subprocess.run(
+        ["cmd", "/c", str(cli), "plugin", "--profile", profile, "install"],
+        env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=900, creationflags=RUNFLAGS,
+    )
+    tail = [ln for ln in (proc.stdout or "").splitlines() if ln.strip()][-4:]
+    for ln in tail:
+        info(ln)
+    (ok if proc.returncode == 0 else bad)(f"profile install 退出码 {proc.returncode}")
+    return proc.returncode
+
+
+def cmd_attach(target_home: str = "", target_profile: str = "desktop",
+               apply: bool = False, no_install: bool = False) -> int:
+    """把接入层（软依赖桥）装进目标 harness 的 profile。默认只预览，--apply 才动手。"""
+    home = resolve_target_home(target_home)
+    prof = home / "profiles" / target_profile
+    head(f"接入层安装：{prof}")
+    if not (prof / "package.json").exists():
+        bad(f"目标 profile 不存在：{prof / 'package.json'}")
+        return 1
+    soft, why = bridge_is_soft()
+    (ok if soft else bad)(f"软依赖检查：{why}")
+    if not soft:
+        return 1
+
+    meta = _profile_manifest(prof)
+    deps = meta.get("dependencies") if isinstance(meta.get("dependencies"), dict) else {}
+    bundles = _bundles_of(meta)
+    if not bundles:
+        bad("目标 package.json 里没有 dsh.profile.bundles —— 看着不像 DSH profile，拒绝操作")
+        return 1
+    spec = "link:" + bridge_dir().resolve().as_posix()
+    need_dep = deps.get(BRIDGE_PKG) != spec
+    need_bundle = BRIDGE_PKG not in bundles
+
+    info(f"目标 harness home：{home}")
+    info(f"目标 profile：{target_profile}（现有 bundle {len(bundles)} 个）")
+    if need_dep:
+        info(f"依赖：{BRIDGE_PKG} → {spec}（原值：{deps.get(BRIDGE_PKG) or '无'}）")
+    if need_bundle:
+        info(f"bundles：追加 {BRIDGE_PKG}")
+    if not need_dep and not need_bundle:
+        ok("已经装好了，无需改动")
+        return 0
+    if not apply:
+        warn("这是预览。确认无误后加 --apply 执行（会先备份目标 profile 的清单）")
+        return 0
+
+    backup = _backup_profile_manifest(prof, "attach")
+    info(f"已备份目标清单：{backup}")
+    deps[BRIDGE_PKG] = spec
+    meta["dependencies"] = deps
+    dsh = meta.setdefault("dsh", {})
+    profile_meta = dsh.setdefault("profile", {})
+    profile_meta["bundles"] = bundles + ([BRIDGE_PKG] if need_bundle else [])
+    (prof / "package.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    ok("package.json 已写入")
+
+    if no_install:
+        warn("跳过 pnpm install（--no-install）；链接要等目标 harness 下次启动或手动 install 才有")
+    elif _run_profile_install(home, target_profile) != 0:
+        warn("pnpm install 失败；清单已改好，可修好网络后重跑 wb.py attach --apply")
+        return 1
+
+    link = prof / "node_modules" / BRIDGE_PKG
+    (ok if link.exists() else warn)(f"node_modules 链接：{'已就位' if link.exists() else '还没生成'}")
+    head("下一步")
+    info("重启目标 harness 才生效（桥是 host 代码，不热重载）")
+    info("验证：目标 harness 里应出现 workbench_status / workbench_api / workbench_plugins / workbench_call 四个工具")
+    return 0
+
+
+def cmd_detach(target_home: str = "", target_profile: str = "desktop",
+               apply: bool = False, no_install: bool = False) -> int:
+    """把接入层从目标 harness 的 profile 里摘干净（含 node_modules 链接）。"""
+    home = resolve_target_home(target_home)
+    prof = home / "profiles" / target_profile
+    head(f"接入层卸载：{prof}")
+    if not (prof / "package.json").exists():
+        bad(f"目标 profile 不存在：{prof / 'package.json'}")
+        return 1
+    meta = _profile_manifest(prof)
+    deps = meta.get("dependencies") if isinstance(meta.get("dependencies"), dict) else {}
+    bundles = _bundles_of(meta)
+    has_dep = BRIDGE_PKG in deps
+    has_bundle = BRIDGE_PKG in bundles
+    if not has_dep and not has_bundle:
+        ok("目标 profile 里没有接入层，无需改动")
+        return 0
+    info(f"将移除：依赖{'有' if has_dep else '无'} / bundles{'有' if has_bundle else '无'}")
+    if not apply:
+        warn("这是预览。加 --apply 执行（会先备份目标清单）")
+        return 0
+
+    backup = _backup_profile_manifest(prof, "detach")
+    info(f"已备份目标清单：{backup}")
+    deps.pop(BRIDGE_PKG, None)
+    meta["dependencies"] = deps
+    if has_bundle:
+        dsh = meta.setdefault("dsh", {})
+        dsh.setdefault("profile", {})["bundles"] = [b for b in bundles if b != BRIDGE_PKG]
+    (prof / "package.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    ok("package.json 已清理")
+
+    link = prof / "node_modules" / BRIDGE_PKG
+    if link.exists():
+        try:
+            if link.is_dir() and not link.is_symlink():
+                shutil.rmtree(link)
+            else:
+                os.remove(link)
+        except Exception:
+            try:
+                subprocess.run(["cmd", "/c", "rmdir", str(link)], capture_output=True, creationflags=RUNFLAGS)
+            except Exception:
+                pass
+        (ok if not link.exists() else warn)(f"node_modules 链接{'已移除' if not link.exists() else '没删掉，手动清一下'}")
+
+    if not no_install:
+        _run_profile_install(home, target_profile)
+    warn("重启目标 harness 后桥才真正卸载（在那之前它还在进程里跑着）")
+    return 0
+
+
 def current_url() -> str | None:
     """取最新的带 token 入口（token 每次重启都换）。"""
     log = LOG_DIR / "workbench.out.log"
@@ -2409,6 +2593,10 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--from", dest="from_archive", default="latest")
     ap.add_argument("--keep-nav", dest="keep_nav", default="")
     ap.add_argument("--no-restart", dest="no_restart", action="store_true")
+    ap.add_argument("--target-home", dest="target_home", default="")
+    ap.add_argument("--target-profile", dest="target_profile", default="desktop")
+    ap.add_argument("--apply", dest="apply", action="store_true")
+    ap.add_argument("--no-install", dest="no_install", action="store_true")
     ap.add_argument("-n", type=int, default=40)
     args = ap.parse_args(argv[1:])
 
@@ -2433,6 +2621,8 @@ def main(argv: list[str]) -> int:
         "uninstall-plugin": lambda: cmd_uninstall_plugin(
             (args.rest[0] if args.rest else (args.sub or args.spec or "")), args.no_restart),
         "fix-ui": lambda: cmd_fix_ui(),
+        "attach": lambda: cmd_attach(args.target_home, args.target_profile, args.apply, args.no_install),
+        "detach": lambda: cmd_detach(args.target_home, args.target_profile, args.apply, args.no_install),
         "url": lambda: cmd_url(),
         "open": lambda: cmd_open(),
         "page": lambda: cmd_page(),

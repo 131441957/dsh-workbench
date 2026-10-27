@@ -33,8 +33,20 @@
 - **设置页**：只留 语言 / 外观 / 字号大小；其余按标题文字隐藏（`pruneSettings()`，正则 `[\w-]+_(row|group|setting)`，别按 `[data-slot]` 判断——它包住整个区域）。
 - **备份**：`wb.py backup --note "…"` → `backups\snapshot-<时间>.zip`（含 tools/plugins/seeds/docs/ui + config.json + home/profiles/bench + home/storages/*.json；**不收** credentials/app/state/logs）。现有 5 份快照全保留 + 运行时备份 `app-0.2.1-alpha.1-*`（1.69 GB，`rollback` 秒回）。
 
-## 装一个带界面的插件（统一方法，2026-10-27 定）
+## 把工作台挂到另一台机器 / 别人的 harness 上（2026-10-27）
 ```powershell
+python tools\wb.py attach [--target-home <对方的 DSH_HOME>] [--target-profile desktop]          # 预览
+python tools\wb.py attach --target-home <…> --apply                                              # 真正写
+python tools\wb.py detach --target-home <…> --apply                                              # 撤掉
+```
+- **只碰目标 profile 的 `package.json`**（`dependencies` + `dsh.profile.bundles`）与 `node_modules` 里那条链接；**绝不碰安装目录（app.asar / E:\SSS）**。
+- 装的是 `dsh-workbench-bridge` 一个包，且**强制软依赖**：`attach` 会先检查桥源码里有没有 `export const inject = []`，不是软依赖就**拒绝安装**（硬依赖会把目标 harness 打死）。
+- 默认干跑（只打印计划）；`--apply` 才写，写前把目标清单备份到 `backups\attach-<时间>\` / `detach-<时间>\`。
+- 目标 profile 没有 `dsh.profile.bundles` 时直接拒绝（不是 DSH profile）。
+- 装/卸都要**重启目标 harness** 才生效（桥是 host 代码）。
+- 演练办法（别拿真主 profile 试）：在 `state\` 下造一个假 home（`profiles\desktop\package.json` 带最小 bundles），用 `--target-home` 指过去走完整链路。
+
+## 装一个带界面的插件（统一方法，2026-10-27 定）```powershell
 python E:\DSH-WORKBENCH\tools\wb.py plugin-info   <包名>   # 只侦察：client 入口 / 注册槽位 / 设置分区 / peer
 python E:\DSH-WORKBENCH\tools\wb.py install-plugin <包名|目录> [--keep-nav 标题] [--no-restart]
 ```

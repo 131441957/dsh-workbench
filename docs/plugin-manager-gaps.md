@@ -27,7 +27,7 @@
 
 | ID | 现象 | 证据 | 修法 | 状态 |
 |---|---|---|---|---|
-| DIST-01 | **主驾桥没有自动化安装**：`wb.py install` 里没有任何把 `dsh-workbench-bridge` 装进主 profile 的步骤 | `cmd_install` 无 bridge 相关代码 | 新增 `wb.py attach` / `detach`：把桥以软依赖装进目标 harness 的 profile（写 `dependencies` + `dsh.profile.bundles` + pnpm install），失败可回滚；`detach` 反向移除 | 待做 |
+| DIST-01 | **主驾桥没有自动化安装**：`wb.py install` 里没有任何把 `dsh-workbench-bridge` 装进主 profile 的步骤 | `cmd_install` 无 bridge 相关代码 | `wb.py attach` / `detach`：只改目标 profile 的 `package.json`（依赖 + bundles），装软依赖桥，默认**只预览**，`--apply` 才写，写前备份清单；`detach` 反向清理含 `node_modules` 链接 | **已完成（2026-10-27）**：假 home 演练通过（装→幂等→卸→语义还原），真实主 profile 只做了预览（哈希未变） |
 | DIST-02 | 端口写死：`59430` 出现 19 处；`config.json` 存绝对 install/home | `Select-String 59430` 计数 | 端口从 `config.json`/`DSH_WORKBENCH_PORT` 读取，占用时自动 +1 探测；所有 UI 文案里的 59430 改成运行时取 | 待做 |
 | DIST-03 | `seeds\*` 里含本机绝对路径（`link:E:/DSH-WORKBENCH/...`） | `seeds\bench\package.json`、`seeds\main-profile\package.json` | 种子改为模板（`${WB_ROOT}` 占位），`install` 时渲染；这两个文件只作快照参考时要在 README 标明 | 待做 |
 | DIST-04 | 文档全部面向"这台机器" | `docs\handoff.md` 里 12 处 `E:\DSH-WORKBENCH` | 新增面向客户/新机器的 `docs\install-for-customer.md`：前置条件、安装步骤、验证、卸载、常见故障 | 待做 |
@@ -42,7 +42,7 @@
 
 1. ~~`fix-ui`（PM-01）+ `uninstall-plugin`（PM-04/PM-08）~~ **已完成 2026-10-27**
 2. ~~装前快照 + 失败回滚（PM-02）~~ **已完成 2026-10-27**（台账 PM-05 部分完成）
-3. `attach`/`detach`（DIST-01）——这是"能给别人装"的第一道门
+3. ~~`attach`/`detach`（DIST-01）~~ **已完成 2026-10-27**（预览/幂等/卸载/守卫均演练通过，真实主 profile 未动）
 4. 端口/路径可移植（DIST-02/03）+ 客户文档（DIST-04）
 5. 其余（PM-03/05 锁版本/06/07/09、DIST-05）
 
