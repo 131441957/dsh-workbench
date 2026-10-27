@@ -31,13 +31,22 @@
  *       （它按 `*_panelRow` 动态发现，跨版本都有效）。
  * ────────────────────────────────────────────────────────────────────────── */
 
-/* 1.1 原侧栏 / 空右列不占位
- *     **但**：某些版本（0.2.1-rc.3）把「设置」入口放在左栏底部（账号菜单）里，
- *     左栏一藏，用户就再也打不开设置 → 装上插件也看不到配置界面。
- *     所以由 JS 判断：找不到"左栏之外的设置入口"时，给 body 加 `wb-keep-sidebar`，
- *     这条规则就让位（保留左栏）。宁可界面丑一点，也不能把设置弄丢。 */
+/* 1.1 原侧栏不占位：**把左栏停到屏幕外**，而不是 display:none —— 这条是硬的。
+ *     原因（2026-10-27 实测）：设置入口（`[data-slot="sidebar.settings"]` / `settings.launcher`）
+ *     就长在左栏底部。左栏一旦 display:none，那个按钮点下去**弹不出设置弹层**
+ *     （自检：navCells=0、dialogs=0）→ 顶栏的「设置」和所有插件设置分区按钮全变死按钮，
+ *     用户连插件配置界面都进不去。
+ *     改成 position:fixed; left:-9999px 之后：不占位、看不见，但元素仍是"渲染中"的状态，
+ *     程序化点击照常打开设置（弹层是 portal，开在屏幕正中，不受锚点位置影响）。
+ *     安全网：某些版本（0.2.1-rc.3）程序化打开设置不成功 → workbench.js 的静默探测会实测出来，
+ *     然后给 body 加 `wb-keep-sidebar`，走下面 1.1b 那条（保留左栏，用户自己点）。 */
 body:not(.wb-keep-sidebar) [class*="_sidebarCol"] {
-  display: none !important;
+  position: fixed !important;
+  left: -9999px !important;
+  top: 0 !important;
+  width: 280px !important;
+  min-width: 280px !important;
+  height: 100vh !important;
 }
 
 [class*="_rightbarCol"] {
@@ -112,6 +121,28 @@ body.wb-keep-sidebar [class*="_regionArea"] {
   flex: 0 0 auto !important;
   min-width: 110px !important;
   max-width: 150px !important;
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * 2.2 「隐形斗篷」：静默探测设置分区专用（workbench.js 的 silentSettingsProbe）
+ *
+ * 为什么需要：插件加在设置里的分区标题，只有弹层渲染出来之后才存在于 DOM 里。
+ * 所以页面加载后，**如果已装插件集合变了**，会替用户不可见地开一次设置、把分区标题
+ * 扫出来（扫完结果进 state\ui-config.json，下次顶栏直接就有它的配置入口）。
+ *
+ * 这条规则就是"不可见"的实现：探测期间 body 上有 `wb-probing`，所有弹层/遮罩
+ * 一律 visibility:hidden。用 visibility 而不是 display:none / opacity:0 的原因：
+ *   · display:none 会把元素从布局里摘掉 → 量不到导航格子的尺寸，探测拿不到标题；
+ *   · opacity:0 仍然参与命中测试，万一是真的鼠标在动容易被误点；
+ *   · visibility:hidden 保留布局（能读 textContent 与 rect），又完全看不见。
+ * 探测结束 JS 立刻摘掉这个 class；另外 3.5 秒看门狗兜底，不会把界面关在隐形状态里。
+ * ⚠️ 删掉这一条 → 装完插件首次加载页面会看到设置闪一下。
+ * ────────────────────────────────────────────────────────────────────────── */
+body.wb-probing [class*="_overlay"],
+body.wb-probing [role="dialog"],
+body.wb-probing dialog,
+body.wb-probing [class*="_modal"] {
+  visibility: hidden !important;
 }
 
 /* ──────────────────────────────────────────────────────────────────────────

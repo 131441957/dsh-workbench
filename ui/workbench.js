@@ -94,12 +94,13 @@
         hasPluginsEntry: buttons.includes('插件'),
         topbar: Boolean(document.getElementById('wb-topbar')),
         masked: Boolean(state.mainMasked),
-        // 原版侧栏是否还露着：任何 *_panelRow 在我们顶栏之外、且还占着可见矩形 → 说明没藏干净
+        // 原版侧栏是否还露着：任何 *_panelRow 在我们顶栏之外、还占着**屏幕内**的可见矩形 → 没藏干净
+        // （左栏现在是"停到屏幕外"，它的行仍然有矩形，所以必须按 x 轴判断是否在屏幕内）
         sidebarVisibleRows: Array.from(document.querySelectorAll('[class*="_panelRow"]'))
           .filter((el) => !el.closest('#wb-topbar'))
           .filter((el) => {
             const r = el.getBoundingClientRect()
-            return r.width > 0 && r.height > 0 && el.offsetParent !== null
+            return r.width > 0 && r.height > 0 && el.offsetParent !== null && r.x + r.width > 0
           })
           .length,
         // 我们 CSS 里写的选择器在当前版本里是否存在（类名前缀由运行时生成，换版本可能变）
@@ -127,6 +128,10 @@
         selftestHit: state.selftestHit || null,
         settingsOpen: settingsNavVisible(),
         sidebarKept: Boolean(state.sidebarKept),
+        settingsVerified: Boolean(state.settingsVerified),
+        settingsUnreachable: Boolean(state.settingsUnreachable),
+        // 「隐形斗篷」有没有残留：残留会让所有弹层都看不见 —— 必须是 false
+        bodyCloak: document.body.classList.contains('wb-probing'),
         topbarZ: (() => {
           const bar = document.getElementById('wb-topbar')
           return bar ? getComputedStyle(bar).zIndex : null
@@ -158,13 +163,20 @@
         layoutWidths: (() => {
           const side = bySuffix("sidebarCol")
           const center = bySuffix("centerCol")
+          const sideRect = side ? side.getBoundingClientRect() : null
           return {
-            sidebar: side ? Math.round(side.getBoundingClientRect().width) : null,
+            // 左栏可能是"停到屏幕外"的状态：那种情况下它在屏幕里占 0，别把 -9999 那份宽度算进来
+            sidebar: sideRect ? (sideRect.x + sideRect.width > 0 ? Math.round(sideRect.width) : 0) : null,
             center: center ? Math.round(center.getBoundingClientRect().width) : null,
             viewport: window.innerWidth,
+            // 停到屏幕外的左栏不能把页面撑出横向滚动条（负向左溢出在 LTR 下不会加滚动条）
+            scrollWidth: document.documentElement.scrollWidth,
+            clientWidth: document.documentElement.clientWidth,
           }
         })(),
         closeDebug: state.closeDebug || null,
+        openDebug: state.openDebug || null,
+        settingsProbe: state.settingsProbe || null,
         selftestInfo: state.selftestInfo || null,
         selftestRan: Boolean(state.selftestRan),
         settingsNavCells: allBySuffix('navCell').map((c) => (c.textContent || '').replace(/\s+/g, ' ').trim()).slice(0, 16),
@@ -463,17 +475,18 @@
     return chain
   }
 
-  // 侧栏藏掉后，让相邻的主内容撑满
+  // 侧栏停到屏幕外后，让主内容列撑满。
+  // **只碰 centerCol**：老实现是把 frame 的每个兄弟都设成 `flex:1 1 auto; width:100%`，
+  // 结果空容器 `_bottomRow`（对话/状态行那层）也被拉成 862px 的假中列，把真中列挤到 379px
+  // （2026-10-27 实测）。以前左栏是 display:none，findSidebarChain() 量到 0 高所以 chain 为空、
+  // 这段根本没跑，bug 一直没暴露；改成"停到屏幕外"之后 chain 有值，立刻就现形了。
   const expandMain = (hiddenEls) => {
-    if (!hiddenEls.length) return
-    const outermost = hiddenEls[hiddenEls.length - 1]
-    const layout = outermost.parentElement
-    if (!layout) return
-    for (const child of Array.from(layout.children)) {
-      if (hiddenEls.includes(child) || child.classList.contains('wb-hidden')) continue
-      child.style.setProperty('flex', '1 1 auto', 'important')
-      child.style.setProperty('width', '100%', 'important')
-      child.style.setProperty('min-width', '0', 'important')
+    if (!hiddenEls || !hiddenEls.length) return
+    for (const el of allBySuffix('centerCol')) {
+      el.style.setProperty('flex', '1 1 auto', 'important')
+      el.style.setProperty('width', 'auto', 'important')
+      el.style.setProperty('min-width', '0', 'important')
+      el.style.removeProperty('max-width')
     }
   }
 
@@ -494,15 +507,18 @@
   // 而 0.2.1-rc.3 把设置收进了「更多」菜单里（没有独立按钮）。
   // 所以这里先直点，找不到就点「更多」再点里面的设置（2026-10-27 在 rc.3 床上踩到）。
   const openSettingsPanel = () => {
-    // ① 最稳的入口：`[data-slot="settings.launcher"]`（插槽名跨版本稳定）。
-    //    0.2.1-rc.3 把设置入口放在**原版左栏**里（`sidebar.settings` / `settings.launcher`），
-    //    而我们把左栏藏了 → 顶栏也就没有「设置」；直接点这个插槽即可（元素隐藏不影响程序化点击）。
-    const launcher = document.querySelector('[data-slot="settings.launcher"], [data-slot="sidebar.settings"]')
-    if (launcher) {
-      const btn = launcher.closest('button, a, [role="button"]') || launcher
-      try { realClick(btn); return true } catch { /* 往下走旧路径 */ }
-    }
-    // ② alpha.1 这类有独立「设置」按钮的版本
+    // ① 最稳的入口：`[data-slot="settings.launcher"]` / `[data-slot="sidebar.settings"]`
+    //    （插槽名跨版本稳定）。**必须点到插槽里面的 <button>**：
+    //    这两个插槽本身是 `display:contents` 的 div，`closest('button')` 也拿不到东西，
+    //    点它等于什么都没点 —— 2026-10-27 实测就是这里：顶栏「设置」「插件市场」全是死按钮
+    //    （点了之后 navCell=0、dialog=0）。左栏改成"停到屏幕外"后，点里面的 button 能正常开。
+    const slot = document.querySelector('[data-slot="settings.launcher"], [data-slot="sidebar.settings"]')
+    const target = slot && (slot.matches('button, a, [role="button"]')
+      ? slot
+      : (slot.querySelector('button, a, [role="button"]') || slot.closest('button, a, [role="button"]')))
+    state.openDebug = { slot: Boolean(slot), target: target ? target.tagName : null }
+    if (target && realClick(target)) return true
+    // ② 有独立「设置」按钮的版本
     const direct = findAppButton('设置')
     if (direct) { realClick(direct); return true }
     for (const label of ['更多', 'More']) {
@@ -638,6 +654,11 @@
 
   const clickTab = (tab) => {
     if (tab.kind === 'settings') return openSettingsSection(tab.section)
+    // 「设置」是个开关：开着就关、没开就开（别先关再开——那样会闪一下）
+    if (tab.label === '设置') {
+      if (settingsNavVisible()) return closeSettingsIfOpen()
+      return openSettingsPanel()
+    }
     closeSettingsIfOpen()
     // 优先按文字现找（React 重绘会换掉行元素），找不到再用建栏时缓存的元素
     const btn = (tab.el && tab.el.isConnected ? tab.el : null) || findAppButton(tab.label)
@@ -758,17 +779,41 @@
     return hidden
   }
 
+  // 把原版左栏**停到屏幕外**（而不是 display:none）。
+  // 为什么：设置入口就长在左栏底部（`[data-slot="sidebar.settings"]`），元素一旦不渲染，
+  // 点它就弹不出设置弹层（2026-10-27 实测 navCell=0 / dialogs=0）→ 顶栏「设置」变死按钮。
+  // 停在屏幕外 = 不占位 + 看不见 + 仍然可点（弹层是 portal，开在屏幕正中）。
+  // 注意：不能加 `.wb-hidden`（CSS 里那条是 display:none，会把可点性弄丢）。
+  const parkSidebar = (els) => {
+    for (const el of els || []) {
+      el.classList.remove('wb-hidden')
+      el.style.removeProperty('display')
+      el.style.removeProperty('visibility')
+      el.style.setProperty('position', 'fixed', 'important')
+      el.style.setProperty('left', '-9999px', 'important')
+      el.style.setProperty('top', '0', 'important')
+      el.style.setProperty('width', '280px', 'important')
+      el.style.setProperty('height', '100vh', 'important')
+    }
+  }
+  const unparkSidebar = (els) => {
+    for (const el of els || allBySuffix('sidebarCol')) {
+      for (const prop of ['position', 'left', 'top', 'width', 'height']) el.style.removeProperty(prop)
+    }
+  }
+
   const placeTopbar = () => {
-    // 整条侧栏链路都藏掉（只藏、不禁用插件——禁用一个提供服务的插件会让整页崩）。
-    // 例外：keepSidebar 模式（设置入口只在左栏里的版本）→ 不藏，否则用户打不开设置。
+    // 整条侧栏链路都停到屏幕外（只挪位置、不禁用插件——禁用一个提供服务的插件会让整页崩）。
+    // 例外：keepSidebar 模式（实测这个版本程序化打不开设置）→ 恢复左栏，让用户自己点。
     if (!state.sidebarKept) {
       const chain = findSidebarChain()
       if (chain.length) {
-        for (const el of chain) hide(el)
+        parkSidebar(chain)
         expandMain(chain)
         state.sidebarHides = chain.length
       }
     } else {
+      unparkSidebar()
       // 之前藏过的要还原（用户在同一页面里换了版本/开过别的页面时）
       for (const el of document.querySelectorAll('.wb-hidden')) {
         if (!el.closest('#wb-topbar')) { el.classList.remove('wb-hidden'); el.style.removeProperty('display') }
@@ -851,16 +896,22 @@
 
   // 布局兜底：CSS 已经用后缀选择器做了同样的事，这里只是"CSS 没生效时的保险"。
   // 判断依据是**中列实际宽度**，不依赖任何类名前缀。
-  // 「左栏之外的设置入口」存在吗？0.2.1-alpha.1 有独立设置按钮（存在）；
-  // 0.2.1-rc.3 把设置塞进左栏底部的账号菜单（不存在）→ 这种版本**必须保留左栏**，
-  // 否则用户彻底打不开设置，装上插件也看不到配置界面（2026-10-27 用户实测发现）。
+  // 「左栏还留着有用吗？」——判据从"设置入口在不在左栏外"改成**运行时实测**：
+  //   ① settingsUnreachable（上次静默探测发现这版程序化打不开设置，如 rc.3）→ 保留左栏；
+  //   ② settingsVerified（上次探测成功：左栏停在屏幕外也能开设置）→ 左栏可以一直停在外面；
+  //   ③ 都没测过（刚装好）→ 只要存在设置入口就先按"能开"处理，等首次探测给结论。
+  // 之前那版用 findButton('设置') 判断"左栏之外有没有入口"，会命中**我们自己的顶栏按钮**，
+  // 于是永远认为左栏可以藏 → 顶栏「设置」变死按钮（2026-10-27 实测 navCells=0）。
+  const appSettingsEntry = () => {
+    const slot = document.querySelector('[data-slot="settings.launcher"], [data-slot="sidebar.settings"]')
+    const inside = slot ? (slot.querySelector('button, a, [role="button"]') || slot) : null
+    return inside || findAppButton('设置') || null
+  }
+
   const settingsReachableOutsideSidebar = () => {
-    const chain = findSidebarChain()
-    const inside = (el) => chain.some((c) => c.contains(el))
-    const direct = findButton('设置')
-    if (direct && !inside(direct)) return true
-    const slots = Array.from(document.querySelectorAll('[data-slot="settings.launcher"], [data-slot="sidebar.settings"]'))
-    return slots.some((el) => !inside(el) && el.getBoundingClientRect().width > 0)
+    if (state.settingsUnreachable) return false
+    if (state.settingsVerified) return true
+    return Boolean(appSettingsEntry())
   }
 
   const forceLayout = () => {
@@ -883,9 +934,12 @@
     center.style.setProperty('width', 'auto', 'important')
     center.style.setProperty('max-width', 'none', 'important')
     center.style.setProperty('min-width', '0', 'important')
-    for (const suffix of keepSidebar ? ['rightbarCol', 'handle'] : ['sidebarCol', 'rightbarCol', 'handle']) {
+    for (const suffix of ['rightbarCol', 'handle']) {
       for (const el of allBySuffix(suffix)) el.style.setProperty('display', 'none', 'important')
     }
+    // 左栏：停到屏幕外（**不是** display:none —— 设置入口就在里面，见 parkSidebar 的注释）
+    if (keepSidebar) unparkSidebar()
+    else parkSidebar(allBySuffix('sidebarCol'))
     state.layoutForced = center.getBoundingClientRect().width
     return true
   }
@@ -894,6 +948,7 @@
   let settingsCaptured = false
   const watchSettings = () => {
     if (settingsCaptured) return
+    if (probing) return   // 静默探测开的那一次设置不算"用户打开了设置"，别拍快照、别留状态
     const dialogs = Array.from(document.querySelectorAll('[role="dialog"], dialog'))
     const hit = dialogs.find((d) => /设置/.test(d.textContent || ''))
     if (hit) {
@@ -932,6 +987,113 @@
   }
   window.__wbProbeSettings = () => { probed = false; probeSettings() }
 
+  // ── 5.5) 静默探测插件设置分区（handoff §6.4：装完插件不该还要人先点一次设置）──────
+  // 背景：插件加的分区标题**只有设置弹层渲染出来之后**才存在于 DOM 里。只注册
+  // `settings.section`、不注册 `sidebar.panellist` 的插件（如 dsh-pet），在用户第一次
+  // 打开设置之前顶栏不会有它的配置入口 —— 用户会以为"装了没配置界面"。
+  // 做法：页面加载后，若服务端说"已装插件集合变了"（指纹不一致），就**不可见地**开一次设置：
+  //   ① 先给 body 加 `wb-probing`（workbench.css 里把 overlay/dialog 设成 visibility:hidden）；
+  //   ② 打开设置 → 等左侧 navCell 出现 → 复用 discoverSettingsSections() 把分区挖出来
+  //      （它顺手把结果落进 state\ui-config.json 并重建顶栏）；
+  //   ③ 关掉设置、还原现场、回报"已扫描"指纹（下次加载就不用再探）。
+  // 三条不变量：
+  //   ① 用户已经开着设置 / 保留左栏的版本（rc.3 程序化打不开设置）/ 自检模式 → 一律不探；
+  //   ② 不管成功失败，`wb-probing` 与设置弹层都必须被收拾干净（3.5 秒看门狗兜底）；
+  //   ③ 一次插件变更只探一次；**没扫出分区就不记指纹**，下次还能再试。
+  let probing = false
+
+  // 结论"这版程序化打不开设置"（实测：入口点了、等 1.8 秒一道分区都没渲染出来，rc.3 就是这样）
+  // → 立刻退回方案 B：恢复左栏（窄条、只留底部账号菜单），让用户自己点。
+  // 宁可界面丑一点，也不能把设置弄丢（设置里才有插件配置分区）。
+  const adoptKeepSidebar = () => {
+    state.sidebarKept = true
+    document.body.classList.add('wb-keep-sidebar')
+    unparkSidebar()
+    forceLayout()
+    placeTopbar()
+    refreshTopbar()
+  }
+
+  const silentSettingsProbe = () => {
+    if (probing || state.probeDone) return
+    if (state.sidebarKept) return
+    if ((location.search + location.hash).includes('wb-selftest=')) return
+    if (!state.uiConfig || !state.uiConfig.probeNeeded) return
+    if (settingsNavVisible()) return          // 用户自己在设置里，别插手
+    state.probeDone = true
+    probing = true
+    const t0 = Date.now()
+    const hadEntry = Boolean(appSettingsEntry())
+    document.body.classList.add('wb-probing')
+    const finish = (extra, remember) => {
+      document.body.classList.remove('wb-probing')
+      probing = false
+      state.settingsProbe = { ran: true, ms: Date.now() - t0, ...extra }
+      try { bootDiag() } catch { /* 诊断失败不影响页面 */ }
+      if (!remember) return
+      fetch('/wb-ui/config', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sections: (state.uiConfig.extra || []),
+          scanned: state.uiConfig.fingerprint || '',
+          settingsUnreachable: Boolean(state.settingsUnreachable),
+        }),
+      }).catch(() => {})
+    }
+    if (!openSettingsPanel()) {
+      state.probeDone = false   // 这一帧还没抢到入口，后面那次定时器还能再试
+      finish({ opened: false, reason: 'no-settings-entry', hadEntry }, false)
+      return
+    }
+    let attempt = 0
+    const step = () => {
+      attempt += 1
+      const overlay = settingsRoot()
+      const cells = overlay ? allBySuffix('navCell', overlay) : []
+      if (cells.length >= 2 || attempt >= 14) {
+        const titles = cells.map((c) => (c.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean)
+        if (overlay) {
+          try { discoverSettingsSections(overlay); pruneSettings() } catch (err) {
+            state.errors.push('probe: ' + String(err && err.message ? err.message : err))
+          }
+        }
+        closeSettingsIfOpen()
+        setTimeout(() => {
+          // 设置是我们替用户开的，关掉之后把原来的面板找回来（别把人丢在空白页上）
+          if (!document.querySelector('[data-wb-panel]')) {
+            const back = findButton(DEFAULT_PANEL)
+            if (back) { back.click(); markActive(DEFAULT_PANEL) }
+          }
+          const good = titles.length >= 2
+          state.settingsVerified = good
+          state.settingsUnreachable = !good && hadEntry
+          finish({
+            opened: true,
+            attempts: attempt,
+            titles,
+            sections: (state.uiConfig.extra || []),
+            verdict: good ? 'reachable' : (hadEntry ? 'unreachable' : 'no-navcell'),
+          }, good || state.settingsUnreachable)
+          if (state.settingsUnreachable) adoptKeepSidebar()
+        }, 250)
+        return
+      }
+      setTimeout(step, 120)
+    }
+    setTimeout(step, 150)
+    // 看门狗：探测本身绝不许把界面卡在"隐形斗篷"里
+    setTimeout(() => {
+      if (!probing) return
+      document.body.classList.remove('wb-probing')
+      closeSettingsIfOpen()
+      probing = false
+      state.settingsProbe = { ran: true, ms: Date.now() - t0, opened: true, timeout: true }
+      try { bootDiag() } catch { /* 忽略 */ }
+    }, 3500)
+  }
+  window.__wbSilentProbe = () => { state.probeDone = false; silentSettingsProbe() }
+
   // ── 6) 裁剪设置页：只保留 语言 / 外观 / 字号大小 ─────────────────────
   // 设置项来自不同插件、结构和类名都不一样，唯一稳定的是「标题文字」：
   // 找到标题文本 → 隐藏它最近的 _row / _group / _setting 容器。
@@ -951,6 +1113,13 @@
         if (!KEEP_NAV.includes(title)) KEEP_NAV.push(title)
       }
       state.uiConfig = { extra, keepNav: KEEP_NAV.slice() }
+      // 「要不要静默扫一次设置把插件分区挖出来」由服务端算：它比对"当前已装插件指纹"
+      // 与"上次扫过时的指纹"（state\ui-config.json 的 scanned）。这里只负责接住结论。
+      state.uiConfig.fingerprint = typeof body.fingerprint === 'string' ? body.fingerprint : ''
+      state.uiConfig.probeNeeded = Boolean(body.probeNeeded)
+      // 「这个版本能不能程序化打开设置」是运行时实测出来的结论，落盘在 ui-config.json 里：
+      // true（如 rc.3）→ 保留左栏让用户自己点；false/未测 → 左栏停到屏幕外，顶栏按钮直接可用。
+      state.settingsUnreachable = Boolean(body.settingsUnreachable)
       // 端口从服务端读（客户机上可能是 59431 之类），别在界面里写死 59430
       if (body && Number.isInteger(body.port) && body.port > 0) {
         state.port = body.port
@@ -1022,6 +1191,7 @@
     }
     state.settingsHidden = hidden
     if (state.diagSent) return
+    if (probing) return   // 探测那一次不占用"只上报一次"的名额，免得真排查时没有现场
     state.diagSent = true
     try {
       const probe = []
@@ -1300,15 +1470,74 @@
           return
         }
         if (mode === 'switch') {
-          // 先点插件设置按钮（打开设置弹层），1 秒后再点某个面板入口，
+          // 先打开设置（有"插件设置分区"顶栏按钮就点它，没有就直接开设置面板——
+          // 这样即使没装带设置分区的插件，这条回归测试也能跑），1 秒后再点某个面板入口，
           // 期望：设置被自动关掉（diag 里的 settingsOpen 应为 false）
           const bars = Array.from(document.querySelectorAll('#wb-topbar button.wb-tab'))
           const sectionTab = bars.filter((b) => b.dataset.wbKind === 'settings')[0]
           if (sectionTab) sectionTab.click()
+          else openSettingsPanel()
           setTimeout(() => {
             const panelTab = bars.find((b) => b.dataset.wbKind !== 'settings' && b.textContent === '插件')
             if (panelTab) panelTab.click()
           }, 1000)
+          return
+        }
+        if (mode === 'settingstab') {
+          // 回归测试：点顶栏「设置」两次 —— 第一次开、第二次关（开关语义）
+          const btn = Array.from(document.querySelectorAll('#wb-topbar button.wb-tab'))
+            .find((b) => (b.textContent || '').trim() === '设置')
+          state.selftestInfo = { found: Boolean(btn) }
+          if (btn) {
+            btn.click()
+            setTimeout(() => {
+              state.selftestInfo.afterFirst = settingsNavVisible()
+              btn.click()
+              setTimeout(() => { state.selftestInfo.afterSecond = settingsNavVisible() }, 600)
+            }, 900)
+          }
+          return
+        }
+        if (mode === 'menusettings') {
+          // 跨版本实验（rc.3）：设置藏在"账号菜单 → 设置"两步里。
+          // 先点触发器开菜单，把菜单项列出来，再点写着「设置」的那一项，看弹层出不出来。
+          const slot = document.querySelector('[data-slot="settings.launcher"], [data-slot="sidebar.settings"]')
+          const trigger = slot && (slot.querySelector('button, a, [role="button"]') || slot)
+          state.selftestInfo = { trigger: Boolean(trigger) }
+          if (trigger) {
+            realClick(trigger)
+            setTimeout(() => {
+              const menus = Array.from(document.querySelectorAll('[role="menu"], [class*="_menu"], [class*="_popover"]'))
+              state.selftestInfo.menus = menus.length
+              state.selftestInfo.menuTexts = menus.slice(0, 2).map((m) => (m.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120))
+              const items = Array.from(document.querySelectorAll('[role="menuitem"], [role="menu"] button, [role="menu"] div[tabindex], [class*="_menuItem"]'))
+              state.selftestInfo.items = items.map((i) => (i.textContent || '').replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 10)
+              const hit = items.find((i) => /设置/.test(i.textContent || ''))
+              state.selftestInfo.hitItem = Boolean(hit)
+              if (hit) realClick(hit)
+              setTimeout(() => {
+                state.selftestInfo.navCells = allBySuffix('navCell').length
+                state.selftestInfo.dialogs = document.querySelectorAll('[role="dialog"], dialog').length
+                state.selftestInfo.settingsOpen = settingsNavVisible()
+              }, 1000)
+            }, 700)
+          }
+          return
+        }
+        if (mode === 'layout') {
+          // 排障：把 frame 每个直接子元素的类名/尺寸/computed 关键属性打出来。
+          // （2026-10-27 用来查"左栏停到屏幕外之后中列被 _bottomRow 挤成 379px"）
+          const frame = bySuffix('frame')
+          state.selftestInfo = frame ? Array.from(frame.children).slice(0, 12).map((el) => {
+            const r = el.getBoundingClientRect()
+            const cs = getComputedStyle(el)
+            return {
+              cls: String(el.className || '').slice(0, 44),
+              rect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
+              display: cs.display, position: cs.position,
+              flex: cs.flex, width: cs.width, minWidth: cs.minWidth, inline: (el.getAttribute('style') || '').slice(0, 80),
+            }
+          }) : 'no-frame'
           return
         }
         if (mode === 'tab') {
@@ -1357,6 +1586,10 @@
     }
     // 自动探测只在调试时用：默认关闭，需要时控制台执行 __wbProbeSettings()
     if ((location.search + location.hash).includes('probe-settings')) setTimeout(probeSettings, 5200)
+    // 静默探测插件设置分区：只在"已装插件集合变了"时跑（服务端指纹判断），全程不可见。
+    // 两次机会：5.4 秒时设置入口一般已就绪；9 秒再补一次（首帧没抢到入口时能自愈）。
+    setTimeout(silentSettingsProbe, 5400)
+    setTimeout(silentSettingsProbe, 9000)
     setInterval(() => { sweep(); refreshTopbar(); watchSettings() }, 2500)
   }
 
