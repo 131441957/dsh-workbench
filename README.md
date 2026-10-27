@@ -14,12 +14,27 @@
 一套**独立于主 harness** 的插件宿主：自己的 DSH 运行时副本、自己的 profile、自己的端口，
 插件与界面改造全在这里做，主 harness 只保留一个**软依赖**接入层，可随时摘掉。
 
+## 适用范围（重要）
+
+| | 类别 | 说明 |
+|---|---|---|
+| ✅ | **自研插件** | 注册 `sidebar.panellist` + `main` 面板、`settings.section` 设置分区、`shell.overlay` 浮层的插件——装完顶栏或设置里就有入口 |
+| ✅ | **非会话类插件** | 不依赖活的会话/对话上下文的界面 |
+| ❌ | **会话类插件** | `conversation.*`（`conversation.chat.*` / `conversation.composer*` / `conversation.input.*` …）与 `composer.*`：这些槽位绑定真实会话上下文，且客户端 API **只允许插件层渲染 `root` 槽位**（`child slots render through the component props face`），工作台无法替插件声明这些子槽位。这类插件请装在 DSH 本体里用 |
+
+**适用版本**：针对 **DeepSeek Harness 0.2.1-rc.3** 验证与分发（`0.2.1-alpha.1` 同样实测可用）。
+换版本先跑 `python tools\wb.py preflight` 做兼容体检。
+
+排查"插件装了但界面不显示"：页面控制台执行 `__wbSlotsInventory().missingHost`，
+列出的就是"插件想要、但这个 harness 版本没有宿主"的槽位——这类槽位不会渲染，不是 CSS 问题。
+
 ## 直接下载（不用自己打包）
 
-**[⬇ DSH-Workbench-v0.1.0.zip](https://github.com/131441957/dsh-workbench/releases/latest)**
+**[⬇ DSH-Workbench-v0.1.1.zip](https://github.com/131441957/dsh-workbench/releases/latest)**
 （约 170 KB，不含运行时——安装时会从你已装的 harness 复制一份）
 
-下载 → 解压 → 双击 `install.cmd` → 打开页面。三种装法见 [安装指南](docs/install-for-customer.md)。
+下载 → 解压 → 双击 `install.cmd` → 打开页面；不要了双击 `uninstall.cmd`（默认演练，加 `-Apply` 才真删）。
+三种装法见 [安装指南](docs/install-for-customer.md)。
 
 > 为什么做这个：改主 harness 的 webui 曾把它弄到无法修复。工作台把这类风险关进笼子——
 > 工作台炸了重装工作台，主驾不受影响。

@@ -3,6 +3,8 @@
 > 工作台自带一份**运行时副本**，所以“能不能用”取决于目标版本提供不提供它需要的**服务、槽位、客户端包**。
 > 静态判断用 `wb.py preflight --install <目录>`（读 `runtime.json` + 在 `app.asar` 里数标记），
 > 动态确认靠“开来一套床 + 跑 install”。
+>
+> **v0.1.1 的发布目标版本：DeepSeek Harness 0.2.1-rc.3**（同时实测可用：0.2.1-alpha.1）。
 
 ## 三档结论（`wb.py preflight`）
 

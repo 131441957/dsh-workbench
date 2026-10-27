@@ -1753,14 +1753,17 @@ def cmd_pack(out: str = "", include_test: bool = False, force: bool = False,
         "note": "复制为 config.json 后按需改端口；install/home 路径在首次运行 wb.py doctor 时自动识别",
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-    # 双击安装器：installer\ 下的两个文件复制到**包根**（它们会找同级的 tools\wb.py）
+    # 双击安装器：installer\ 下的文件复制到**包根**（它们会找同级的 tools\wb.py）
+    # install* = 安装/修复，uninstall* = 卸载（默认演练，-Apply 才真动手）
     installer_dir = WB_ROOT / "installer"
     if installer_dir.is_dir():
-        for name in ("install.cmd", "install.ps1"):
+        copied = []
+        for name in ("install.cmd", "install.ps1", "uninstall.cmd", "uninstall.ps1"):
             src_file = installer_dir / name
             if src_file.exists():
                 shutil.copy2(src_file, dest / name)
-        info("已复制双击安装器 install.cmd / install.ps1")
+                copied.append(name)
+        info("已复制双击安装器 / 卸载器：" + " ".join(copied))
 
     (dest / "README.md").write_text(f"""# DSH 工作台 {ver}（分发包）
 
@@ -1774,6 +1777,22 @@ def cmd_pack(out: str = "", include_test: bool = False, force: bool = False,
 
 工作台 = 独立的 DSH 运行时副本 + 自带插件宿主，用来装/改插件而不碰你的主 harness。
 主 harness 只加一个**软依赖**接入层（`dsh-workbench-bridge`），可随时 `detach` 撤掉。
+
+## 适用范围（重要）
+
+- ✅ **自研插件**：注册 `sidebar.panellist` + `main` 面板、`settings.section` 设置分区、`shell.overlay` 浮层——装完顶栏/设置里就有入口。
+- ✅ **非会话类插件**：不依赖活的会话/对话上下文的界面。
+- ❌ **会话类插件**：`conversation.*`（`conversation.chat.*` / `conversation.composer*` / `conversation.input.*` …）
+  与 `composer.*` 这些槽位绑定的是真实会话上下文，**且客户端 API 只允许插件层渲染 `root` 槽位**
+  （`child slots render through the component props face`），工作台无法替插件声明这些子槽位。
+  这类插件请装在 DSH 本体里使用。
+
+## 适用版本
+
+本版（{ver}）针对 **DeepSeek Harness 0.2.1-rc.3** 验证与分发；`0.2.1-alpha.1` 同样实测可用。
+换版本后先跑 `python tools\wb.py preflight` 做兼容体检（compatible / degraded / incompatible 三档）。
+排查"插件装了但界面不显示"：页面控制台执行 `__wbSlotsInventory().missingHost`，
+列出的就是"插件想要、但这个 harness 版本没有宿主"的槽位。
 
 ## 前置
 
@@ -1813,6 +1832,20 @@ python tools\\wb.py fix-ui                        # 从别处装的插件，跑�
 
 `app\\`（运行时副本，1.7GB）、`home\\`、`state\\`、`logs\\`、`backups\\`。
 `tools\\wb.py backup` 只备份源码类内容；`state\\plugin-notes.json` 与 `state\\ui-config.json` 会一起备份。
+
+## 卸载
+
+双击包根目录的 **`uninstall.cmd`**：
+
+| 用法 | 效果 |
+|---|---|
+| `uninstall.cmd`（默认） | **演练**：只打印会停哪些进程、会删哪些快捷方式，不动任何文件 |
+| `uninstall.ps1 -Apply` | 真卸载：停 serve/watchdog/supervisor + 删**只指向本目录**的快捷方式（文件保留） |
+| `uninstall.ps1 -Apply -Purge` | 连目录一起删（延迟 2 秒自删，避免删到自己） |
+| `uninstall.ps1 -Apply -Detach` | 顺带把接入层从你的 harness profile 摘掉（要重启那个 harness 才生效） |
+
+等价命令行：`python tools\\wb.py uninstall [--apply] [--purge] [--detach]`。
+安全边界：只停本目录的进程、只删参数里含本目录路径的快捷方式，绝不删除你的 harness 安装。
 """, encoding="utf-8")
 
     marker = "E:" + chr(92) + "DSH-WORKBENCH"   # 本机绝对路径标记（别写成双反斜杠，会数出 0）

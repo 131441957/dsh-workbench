@@ -121,7 +121,10 @@ python tools\wb.py restore --from latest     # 或者直接还原最近一份快
 
 **Q5：怎么彻底卸载？**
 
-一条命令就够（默认只演练，看清楚再加 `--apply`）：
+**最省事：双击包根目录的 `uninstall.cmd`**（默认演练，什么都不动；看清楚后再跑 `uninstall.ps1 -Apply`，
+连文件一起删加 `-Purge`，顺带摘接入层加 `-Detach`）。
+
+或者一条命令（默认只演练，看清楚再加 `--apply`）：
 
 ```powershell
 python tools\wb.py uninstall                        # 演练：列出会停的服务、会删的快捷方式、目录多大
@@ -147,7 +150,14 @@ python tools\wb.py suspend           # 停服务与自动伴随
 
 ## 8. 这套东西的边界
 
-- 工作台**不接 agent**：它是插件宿主，没有会话界面。因此**只挂在会话界面上的插件**（消息操作、输入框、悬浮层）装进去功能在、界面看不见——`install-plugin` 会提前告警。
+- **适用范围**：面向 **自研插件** 与 **非会话类插件**（面板 / 设置分区 / 浮层都能显示）。
+- **会话类插件不在范围内**：`conversation.*`（`conversation.chat.*` / `conversation.composer*` / `conversation.input.*` …）
+  与 `composer.*` 绑定真实会话上下文，且客户端 API 只允许插件层渲染 `root` 槽位
+  （`child slots render through the component props face`）→ 这类插件请装在 DSH 本体里。
+- **适用版本**：针对 **DeepSeek Harness 0.2.1-rc.3** 验证与分发；`0.2.1-alpha.1` 同样实测可用。
+  换版本先跑 `python tools\wb.py preflight`。
+- 工作台**不接 agent**：它是插件宿主，没有自己的会话界面；会话视图读的是主 harness 的会话（只读 + 投递）。
+- 排查"插件装了但界面不显示"：页面控制台跑 `__wbSlotsInventory().missingHost`，列出的就是没有宿主的槽位。
 - 分发包**不含测试插件**（如插件市场），也不含运行时/日志/备份。
 - 主 harness 里只有接入层一个插件（软依赖）；它挂了也不会拖垮主 harness。
 
