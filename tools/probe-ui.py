@@ -31,6 +31,7 @@ from pathlib import Path
 ap = argparse.ArgumentParser()
 ap.add_argument("--root", required=True)
 ap.add_argument("--keep-open", action="store_true")
+ap.add_argument("--query", default="", help="附在入口 URL 后的 hash 参数，例如 wb-selftest=settings")
 args = ap.parse_args()
 
 ROOT = Path(args.root)
@@ -50,6 +51,9 @@ url = wb.current_url()
 if not url:
     print("拿不到入口 URL（实例没起？）")
     sys.exit(1)
+if args.query:
+    # token 会重定向到 /，但 hash 会保留 —— 所以调试开关一律走 hash
+    url = url.split("#")[0] + "#" + args.query
 
 edge = Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe")
 if not edge.exists():

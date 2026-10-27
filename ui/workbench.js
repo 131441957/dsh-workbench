@@ -123,6 +123,10 @@
         defaulted: Boolean(document.getElementById('wb-topbar')) && state.activeMarked ? true : false,
         buttons,
         topbarTabs: Array.from(document.querySelectorAll('#wb-topbar button.wb-tab')).map((b) => b.textContent),
+        pluginSectionTabs: ((state.uiConfig && state.uiConfig.extra) || []).slice(0, 12),
+        selftestHit: state.selftestHit || null,
+        selftestRan: Boolean(state.selftestRan),
+        settingsNavCells: allBySuffix('navCell').map((c) => (c.textContent || '').replace(/\s+/g, ' ').trim()).slice(0, 16),
         discovered: scanSidebarEntries().map((e) => e.label),
         errors: state.errors.slice(0, 12),
         consoleErrors: (state.consoleErrors || []).slice(0, 12),
@@ -269,6 +273,21 @@
 
   // 发现结果 → 左右两栏布局。LEFT_ORDER/RIGHT_ORDER 只管顺序与左右；
   // 名单外的入口一律追加到左边末尾 —— 这就是"装新插件不用改代码"的实现点。
+  //
+  // 另外：**插件自带的设置分区也要挂顶栏**（用户 2026-10-27 要求：插件设置不该埋在
+  // 「设置」弹层里，应该像面板一样从顶栏一键到达）。分区标题来自 /wb-ui/config 的
+  // keepNav 里除基础项之外的部分（由 wb.py install-plugin 写入），点它 = 打开设置并切到该分区。
+  const settingsSectionTabs = (used) => {
+    const extra = (state.uiConfig && Array.isArray(state.uiConfig.extra)) ? state.uiConfig.extra : []
+    const out = []
+    for (const title of extra) {
+      if (!title || used.has(title)) continue   // 已有同名面板入口就不重复
+      out.push({ label: title, kind: 'settings', section: title })
+      used.add(title)
+    }
+    return out
+  }
+
   const planTabs = () => {
     const entries = scanSidebarEntries()
     const byLabel = new Map(entries.map((e) => [e.label, e]))
@@ -281,6 +300,8 @@
       if (LEFT_ORDER.includes(e.label) || RIGHT_ORDER.includes(e.label)) continue
       left.push(e)
     }
+    const used = new Set([...left, ...RIGHT_ORDER].map((t) => t.label))
+    for (const tab of settingsSectionTabs(used)) left.push(tab)
     const right = []
     for (const label of RIGHT_ORDER) {
       const hit = entryFor(label, byLabel)
@@ -342,7 +363,31 @@
     setTimeout(fire, 700)
   }
 
+  // 打开「设置」并切到某个分区（插件自带分区的顶栏入口用它）。
+  // 为什么这么绕：插件分区是设置在弹层里渲染的，没有独立入口；
+  // 我们能做的正确事就是"打开设置 + 点它左侧导航里那一格"，而不是伪造一个面板。
+  const openSettingsSection = (title) => {
+    const openBtn = findButton('设置')
+    if (openBtn) openBtn.click()
+    const step = (attempt) => {
+      const overlay = settingsRoot()
+      // 优先在设置容器里找；找不到就退到全文档（有些版本导航栏不在 overlay 内部）
+      const cells = (overlay ? allBySuffix('navCell', overlay) : []).concat()
+      const pool = cells.length ? cells : allBySuffix('navCell')
+      const cell = pool.find((c) => (c.textContent || '').trim() === title)
+      if (cell) {
+        cell.click()
+        markActive(title)
+        state.selftestHit = title   // 只给自检用：证明"找到了格子并点到了"
+        return
+      }
+      if (attempt < 10) setTimeout(() => step(attempt + 1), 150)
+    }
+    setTimeout(() => step(0), 200)
+  }
+
   const clickTab = (tab) => {
+    if (tab.kind === 'settings') return openSettingsSection(tab.section)
     // 优先按文字现找（React 重绘会换掉行元素），找不到再用建栏时缓存的元素
     const btn = findButton(tab.label) || (tab.el && tab.el.isConnected ? tab.el : null)
     if (btn) btn.click()
@@ -616,12 +661,16 @@
     return null
   }
 
-  // 设置页根节点：优先按后缀找 `_overlay`；万一那个版本没有这东西，
-  // 退回"文字含『设置』的 dialog"——这样换版本也不会让裁剪整段失效。
-  const settingsRoot = () =>
-    bySuffix('overlay') ||
-    Array.from(document.querySelectorAll('[role="dialog"], dialog')).find((d) => /设置/.test(d.textContent || '')) ||
-    null
+  // 设置页根节点：优先找**内部含导航格子（`*_navCell`）**的 overlay——
+  // 只按 `_overlay` 后缀找会抓到别的遮罩（toast/掩码），那样既裁不到设置、也点不到分区
+  // （2026-10-27 自检时踩到：格子明明在，却因为根节点抓错而"找不到格子"）。
+  const settingsRoot = () => {
+    const withNav = allBySuffix('overlay').filter((el) => el.querySelector('[class*="_navCell"]'))
+    if (withNav.length) return withNav[withNav.length - 1]   // 取最外层那个
+    const dialog = Array.from(document.querySelectorAll('[role="dialog"], dialog'))
+      .find((d) => /设置/.test(d.textContent || '') && d.querySelector('[class*="_navCell"]'))
+    return dialog || bySuffix('overlay') || null
+  }
 
   const pruneSettings = () => {
     const overlay = settingsRoot()
@@ -718,7 +767,10 @@
         if (document.title !== 'DSH 工作台') document.title = 'DSH 工作台'
       }).observe(document.querySelector('title') || document.head, { childList: true, subtree: true, characterData: true })
     } catch { /* 忽略 */ }
-    loadUiConfig() // 先读裁剪白名单（异步，不阻塞）；读了之后 sweep 里的裁剪就用新列表
+    loadUiConfig().finally(() => {
+      // 配置回来之后顶栏可能要多出「插件设置分区」按钮 → 立刻重排一次
+      try { refreshTopbar() } catch { /* 顶栏还没建，下面定时器会补 */ }
+    }) // 先读白名单与插件设置分区（异步，不阻塞）；读了之后裁剪和顶栏都用新列表
     dismiss()
     sweep() // 第一轮：先只处理 toast / 弹窗，不动布局
     observe()
@@ -731,7 +783,21 @@
     setTimeout(() => { sweep(); forceLayout(); openDefault() }, 900)
     setTimeout(() => { sweep(); forceLayout(); openDefault() }, 1800)
     setTimeout(() => { sweep(); forceLayout(); openDefault() }, 3000)
-    setTimeout(bootDiag, 4600)
+    // 自检：`?wb-selftest=settings` 时自动点第一个插件设置分区，并把结果写进 boot-diag。
+    // 只用于验证"顶栏入口 → 设置分区"这条链路，正常使用不会触发。
+    // 注意：自检模式下只写一次 diag（4.5s），否则首次 4.6s 的那份会先被探针读走、
+    // 看不到 selftestHit（2026-10-27 踩过）。
+    const SELFTEST = (location.search + location.hash).includes('wb-selftest=settings')
+    if (SELFTEST) {
+      setTimeout(() => {
+        state.selftestRan = true
+        const extra = (state.uiConfig && state.uiConfig.extra) || []
+        if (extra.length) openSettingsSection(extra[0])
+      }, 2500)
+      setTimeout(bootDiag, 4500)
+    } else {
+      setTimeout(bootDiag, 4600)
+    }
     // 自动探测只在调试时用：默认关闭，需要时控制台执行 __wbProbeSettings()
     if ((location.search + location.hash).includes('probe-settings')) setTimeout(probeSettings, 5200)
     setInterval(() => { sweep(); refreshTopbar(); watchSettings() }, 2500)
