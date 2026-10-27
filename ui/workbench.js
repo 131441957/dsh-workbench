@@ -382,6 +382,14 @@
     return { left, right, all: [...left, ...right] }
   }
 
+  // 只在原版界面里按文字找按钮——**必须排除我们自己的顶栏**，
+  // 否则点「插件」会命中顶栏自己的按钮 → 递归点自己，原版面板永远切不过去
+  // （2026-10-27 用 slots.snapshot 证明注册都在、才定位到这个原因）。
+  const findAppButton = (text) =>
+    Array.from(document.querySelectorAll('button, a, [role="button"]'))
+      .filter((el) => !el.closest('#wb-topbar'))
+      .find((el) => textOf(el) === text)
+
   const findButton = (text) =>
     Array.from(document.querySelectorAll('button, a, [role="button"]')).find((el) => textOf(el) === text)
 
@@ -445,17 +453,17 @@
     const launcher = document.querySelector('[data-slot="settings.launcher"], [data-slot="sidebar.settings"]')
     if (launcher) {
       const btn = launcher.closest('button, a, [role="button"]') || launcher
-      try { btn.click(); return true } catch { /* 往下走旧路径 */ }
+      try { realClick(btn); return true } catch { /* 往下走旧路径 */ }
     }
     // ② alpha.1 这类有独立「设置」按钮的版本
-    const direct = findButton('设置')
-    if (direct) { direct.click(); return true }
+    const direct = findAppButton('设置')
+    if (direct) { realClick(direct); return true }
     for (const label of ['更多', 'More']) {
-      const more = findButton(label)
+      const more = findAppButton(label)
       if (!more) continue
-      more.click()
+      realClick(more)
       setTimeout(() => {
-        const inside = findButton('设置')
+        const inside = findAppButton('设置')
         if (inside) inside.click()
       }, 250)
       return true
@@ -476,7 +484,7 @@
       state.selftestInfo = { attempt, hasOverlay: Boolean(overlay), pool: pool.length, title }
       const cell = pool.find((c) => (c.textContent || '').trim() === title)
       if (cell) {
-        cell.click()
+        realClick(cell)
         markActive(title)
         state.selftestHit = title   // 只给自检用：证明"找到了格子并点到了"
         return
@@ -548,12 +556,45 @@
     return false
   }
 
+  // 真实点击：某些版本（0.2.1-rc.3）用 pointer 事件处理选择，
+  // 直接 `el.click()` 不会切换面板（2026-10-27 用 slots.snapshot 证明注册都在、
+  // 只是点击没生效）。所以补一整串指针序列，再补 click 兜底。
+  const realClick = (el) => {
+    if (!el) return false
+    const rect = el.getBoundingClientRect()
+    const base = {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      view: window,
+      clientX: Math.round(rect.left + rect.width / 2),
+      clientY: Math.round(rect.top + rect.height / 2),
+      button: 0,
+      buttons: 1,
+    }
+    const fire = (Ctor, type, extra) => {
+      try {
+        const ev = Ctor === 'pointer'
+          ? new PointerEvent(type, { ...base, pointerId: 1, pointerType: 'mouse', isPrimary: true, ...extra })
+          : new MouseEvent(type, { ...base, ...extra })
+        el.dispatchEvent(ev)
+      } catch { /* 老浏览器不支持 PointerEvent 就跳过 */ }
+    }
+    fire('pointer', 'pointerdown')
+    fire('mouse', 'mousedown')
+    fire('pointer', 'pointerup', { buttons: 0 })
+    fire('mouse', 'mouseup', { buttons: 0 })
+    fire('mouse', 'click', { buttons: 0 })
+    try { el.click() } catch { /* 忽略 */ }
+    return true
+  }
+
   const clickTab = (tab) => {
     if (tab.kind === 'settings') return openSettingsSection(tab.section)
     closeSettingsIfOpen()
     // 优先按文字现找（React 重绘会换掉行元素），找不到再用建栏时缓存的元素
-    const btn = findButton(tab.label) || (tab.el && tab.el.isConnected ? tab.el : null)
-    if (btn) btn.click()
+    const btn = (tab.el && tab.el.isConnected ? tab.el : null) || findAppButton(tab.label)
+    if (btn) realClick(btn)
     applyPanelTab(tab.panelTab)
     markActive(tab.label)
   }
@@ -1009,6 +1050,14 @@
               snippet: text.slice(0, 100),
             }
           }, 900)
+          return
+        }
+        if (mode === 'slots') {
+          setTimeout(() => {
+            let info = null
+            try { info = window.__wbSlotsDebug ? window.__wbSlotsDebug() : null } catch (err) { info = String(err) }
+            state.selftestInfo = { slots: info }
+          }, 1200)
           return
         }
         if (mode === 'dupe') {

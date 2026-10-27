@@ -494,7 +494,30 @@ window.__ModuleLoader__.load({
       inject: ['slots'],
       __test__: { buildRows },
       apply(ctx) {
-        ctx.slots.inject('sidebar.panellist', () =>
+        // 诊断：把 ctx.slots 的真实 API 暴露出来（跨版本排查面板不渲染用）
+  try {
+    window.__wbSlotsDebug = () => {
+      const s = ctx.slots || {}
+      const proto = Object.getPrototypeOf(s) || {}
+      const out = {
+        protoMethods: Object.getOwnPropertyNames(proto),
+        coreKeys: s._core ? Object.keys(s._core).slice(0, 30) : null,
+        scopes: s._scopes && typeof s._scopes === "object" ? Object.keys(s._scopes).slice(0, 30) : null,
+        rootSource: (() => {
+          try { return String(s._rootSource && s._rootSource.name ? s._rootSource.name : s._rootSource).slice(0, 80) } catch { return null }
+        })(),
+      }
+      // 尽量调用公开方法拿到区域/注册表
+      for (const fn of ["listSubTree", "list", "describe", "regions", "snapshot"]) {
+        try {
+          if (typeof proto[fn] === "function") out[fn] = proto[fn].call(s)
+        } catch (err) { out[fn + "Error"] = String(err && err.message ? err.message : err).slice(0, 120) }
+      }
+      return out
+    }
+  } catch { /* 忽略 */ }
+
+  ctx.slots.inject('sidebar.panellist', () =>
           ctx.slots.register(
             { name: 'sidebar.panellist', id: 'wb-api', order: 40, label: () => '状态' },
             Icon,
