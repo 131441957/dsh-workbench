@@ -1,5 +1,40 @@
-// dsh-workbench-bridge — host half（挂在主 harness 上）.
-// 干三件事：① 工作台是否接入的状态 ② workbench_* 工具 ③ 会话桥（列会话 / 读历史 / 发消息）
+/* ══════════════════════════════════════════════════════════════════════════
+ * dsh-workbench-bridge —— 主驾侧的接入层（host half，**唯一挂在主 harness 的插件**）
+ * --------------------------------------------------------------------------
+ * 它只干三件事：
+ *   ① 告诉主驾「工作台接没接上」（状态）
+ *   ② 给主驾的 agent 三个工具：workbench_status / workbench_api / workbench_plugins / workbench_call
+ *   ③ 会话桥：列主驾会话、读某次对话的历史、往某个会话里投递消息
+ *
+ * ── 路由（PREFIX = /wb-bridge）────────────────────────────────────────────
+ *   GET  /status        公开，只读：工作台可达性/延迟/pid、主驾会话概览
+ *   GET  /plugins       公开，只读：bench profile 里装了什么
+ *   GET  /capabilities  公开，只读：工作台各插件声明的能力清单（20s 缓存，?fresh=1 强制刷新）
+ *   POST /call          **需 x-wb-token**：按名调用某个能力（工作台侧 /wb-api/*）
+ *   GET  /sessions      **需 token**：主驾会话列表
+ *   GET  /session/page  **需 token**：某会话的历史消息
+ *   POST /session/prompt **需 token**：往某会话投递一条消息（queue / steer）
+ *   GET  /events        **需 token**：SSE，每 3 秒一帧 tick（工作台侧转发给页面）
+ *
+ * ── 三条不变量 ───────────────────────────────────────────────────────────
+ * ① **软依赖**（最重要）：`export const inject = []` + `ctx.get('webServer'/'tools')` 取不到就
+ *    延后重试。绝不能写 `inject: ['webServer','tools']` —— 官方一旦改服务名，本 entry 会 pending，
+ *    进而 `startup failed`，**把主驾一起打死**（违反"官方更新不牵连"这条需求）。
+ * ② **只读主驾**：不改主 profile、不碰 E:\SSS 与 home 里的数据；写操作只发生在
+ *    `E:\DSH-WORKBENCH\state\bridge-token.txt`（本插件自己的 token 文件）。
+ * ③ **端口动态**：工作台端口从它的 config.json 读（缓存 5 秒），工作台换端口后不必重启主程序。
+ *
+ * ── 鉴权模型（改路由前先看这段）───────────────────────────────────────────
+ *   `tokenOk(req)` 校验请求头 `x-wb-token`，token 是本进程启动时随机生成并写到
+ *   `<工作台根>\state\bridge-token.txt`（工作台侧读同一个文件）。
+ *   设计上 /status、/plugins、/capabilities 是**公开只读**；写与会话类路由必须带 token。
+ *   写不了 token 文件时会把 token 置空 → 所有需要鉴权的路由自动 401（宁可不可用，也不裸奔）。
+ *
+ * ── 改完怎么验证 ─────────────────────────────────────────────────────────
+ *   python tools\test-http.py --bridge   → 17 项：/status 带 token、无 token 仍可读、
+ *                                          /call 与 /sessions 无 token 应 401、call(plugins) 有结果
+ *   ⚠️ 改本文件（宿主代码）**必须重启主程序**才生效（ESM 模块缓存），改工作台侧不用。
+ * ══════════════════════════════════════════════════════════════════════════ */
 import { randomBytes } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'

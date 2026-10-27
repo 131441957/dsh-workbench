@@ -1,11 +1,38 @@
-// dsh-wb-api-browser — host half.
-// 做两件事：①把工作台 state/ 里采集好的接口基线用 HTTP 暴露出来；②读写"插件备注"。
+/* ══════════════════════════════════════════════════════════════════════════
+ * dsh-wb-api-browser —— 工作台的「插件」面板 + 「状态」面板后端（宿主侧）
+ * --------------------------------------------------------------------------
+ * 两件事：① 把采集好的接口基线 / 插件台账 / 活体快照用 HTTP 暴露给页面；
+ *        ② 读写每个插件下面那条「备注」（state\plugin-notes.json）。
+ *
+ * ── 路由（PREFIX = /wb-api）──────────────────────────────────────────────
+ *   GET  /health        自检：stateDir + pid
+ *   GET  /plugins       插件清单（profile 声明 + 安装台账 + 社区注册表 三份合并）
+ *                       → 面板每行的「来源 / 能力 / 上次验证 / 可升级」都来自这里
+ *   GET  /capabilities  各插件声明的能力（dsh.workbench.capabilities 汇总）
+ *   GET  /live          活体快照：宿主服务实时枚举 + 槽位快照 + 采集时间
+ *   GET  /build         profile 分层（来自 state\api-build.json，由 wb.py api 生成）
+ *   GET  /status        主驾状态快照（读 state\main-status.json）
+ *   GET/POST /notes     插件备注（POST {name, note}；note 为空 = 删除）
+ *
+ * ── 三条不变量 ───────────────────────────────────────────────────────────
+ * ① **软依赖**：`inject = []` + `ctx.get('webServer')` 拿不到就每秒重试（最多 120 次）。
+ *    不写 `inject: ['webServer']`：工作台自己也会因为某版本服务改名而 `startup failed`，
+ *    那等于"面板没挂上，结果整套起不来"。
+ * ② 根目录从自身位置推导（多套工作台共存：主套 / 测试床）。
+ * ③ **枚举宿主服务不要触发初始化**：服务列表走 `ctx.reflect.store` + `Object.getOwnPropertySymbols`，
+ *    数方法用 `Object.getOwnPropertyDescriptor(….value)`；绝不能读属性或 `ctx.get()`（会实例化服务）。
+ *
+ * ── 改完怎么验证 ─────────────────────────────────────────────────────────
+ *   python tools\test-http.py   → /wb-api/{plugins,live,build,status,capabilities,notes} 六项
+ *   面板观感：页面「插件」面板每行应显示 来源 · 能力 · 上次验证 · 可升级
+ * ══════════════════════════════════════════════════════════════════════════ */
 import { readFile, writeFile, rename, mkdir, readdir, stat, access } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-export const inject = ['webServer']
+// 软依赖：见文件头不变量①
+export const inject = []
 
 const PREFIX = '/wb-api'
 
@@ -13,6 +40,7 @@ const PREFIX = '/wb-api'
 // 别写死路径：同一台机器上可以有多套工作台（例如 rc.3 验收床）。
 const PLUGIN_DIR = fileURLToPath(new URL('.', import.meta.url))
 const WB_ROOT = process.env.DSH_WORKBENCH_ROOT || join(PLUGIN_DIR, '..', '..')
+const started = new WeakSet()   // 防止同一个 ctx 被 apply 两次（软依赖重试时会重新调用）
 
 function stateDir() {
   return join(WB_ROOT, 'state')
@@ -343,9 +371,24 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body))
 }
 export function apply(ctx) {
+  if (started.has(ctx)) return
+  started.add(ctx)
+
+  // 软依赖：webServer 可能晚于本插件就绪（或被改名）→ 每秒重试，最多 120 次。
   const server = ctx.get('webServer')
   if (!server) {
-    ctx.logger?.warn?.('wb-api-browser: webServer service unavailable, endpoints not registered')
+    let tries = 0
+    const retry = () => {
+      tries += 1
+      if (ctx.get('webServer')) {
+        started.delete(ctx)
+        try { apply(ctx) } catch (error) { ctx.logger?.warn?.(`wb-api-browser: retry failed: ${String(error)}`) }
+        return
+      }
+      if (tries < 120) setTimeout(retry, 1000)
+    }
+    setTimeout(retry, 1000)
+    ctx.logger?.warn?.('wb-api-browser: webServer 还没就绪，等它就位后再挂路由')
     return
   }
 

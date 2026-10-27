@@ -1,6 +1,28 @@
-// dsh-wb-sessions — 工作台的“会话视图”后端。
-// 只做代理：读主驾的 state 文件拿到端口与 token，再转发到主驾桥 /wb-bridge/session*。
-// 会话本体始终在主 harness，这里不落任何数据。
+/* ══════════════════════════════════════════════════════════════════════════
+ * dsh-wb-sessions —— 工作台的「Harness会话」后端（宿主侧）
+ * --------------------------------------------------------------------------
+ * **只做代理，不落数据**：会话本体始终在主 harness 里。本插件从工作台的 state 里
+ * 读出「主驾端口 + 桥 token」，再转发到主驾桥的 /wb-bridge/session* 路由。
+ *
+ * ── 路由（PREFIX = /wb-sessions）─────────────────────────────────────────
+ *   GET  /list         会话列表（含标题、cwd、运行态、相对时间）
+ *   GET  /page         某会话的历史消息（转发桥的 /session/page）
+ *   POST /send         往某会话投递消息（转发桥的 /session/prompt，需 token）
+ *   GET  /workspaces   工作区注册表（读主驾 storages\workspace.json；default-workspace → 「默认工作区」）
+ *   GET  /events       SSE：转发主驾桥的 /wb-bridge/events（每 3 秒一帧 tick），断线即 abort 上游
+ *   GET  /health       自检：主驾端口/桥是否可达
+ *
+ * ── 三条不变量 ───────────────────────────────────────────────────────────
+ * ① 软依赖：`inject = []`，webServer 用 `ctx.get()` 取（取不到就重试），不硬绑。
+ * ② 根目录从自身位置推导（多套工作台共存：主套 / 测试床，写死会串味）。
+ * ③ **别依赖读会话日志文件**：`session.v4.jsonl.zstd` 是多帧 zstd 追加写，
+ *    本进程里 `zstdDecompressSync` 只解第一帧（5MB 文件只得到 188 字符）。
+ *    会话标题走桥透出的 `summary.projections.values.title`，日志解析只当兜底。
+ *
+ * ── 改完怎么验证 ─────────────────────────────────────────────────────────
+ *   python tools\test-http.py            → 含 /wb-sessions/list 与 /workspaces 两项
+ *   标题/分组的回归：node tools\test-sessions-group.mjs（离线单测，不需要起服务）
+ * ══════════════════════════════════════════════════════════════════════════ */
 import { readFileSync, readdirSync, existsSync, createReadStream } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { createZstdDecompress } from 'node:zlib'
