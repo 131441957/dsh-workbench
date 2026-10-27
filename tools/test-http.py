@@ -32,12 +32,19 @@ wb.WB_PORT = wb.load_port()
 print(f"目标实例   : {wb.WB_ROOT}  port={wb.WB_PORT}")
 
 results: list[tuple[bool, str, str]] = []
+skips: list[tuple[str, str]] = []
+
+
+class Skip(Exception):
+    """这一项在当前环境里没有意义（例如还没接桥的测试床有/没有会话都说明不了问题）。"""
 
 
 def check(name: str, fn):
     try:
         detail = fn() or ""
         results.append((True, name, str(detail)))
+    except Skip as exc:
+        skips.append((name, str(exc)))
     except Exception as exc:  # noqa: BLE001
         results.append((False, name, f"{type(exc).__name__}: {exc}"))
 
@@ -71,7 +78,15 @@ def first_list(data, *keys):
     return []
 
 
-check("/wb-sessions/list", lambda: f"会话 {len(first_list(jget('/wb-sessions/list'), 'items', 'sessions'))} 条")
+# 会话列表：只有"接入了主驾桥"这一套才有意义。
+# 测试床（E:\WB-RC3）本来就没接入任何 harness → 面板如实报"未接入"、会话为空，
+# 这时判 SKIP 而不是 FAIL，也不去借别人的 token 假装通过（2026-10-27 用户指出）。
+def sessions_check():
+    data = jget("/wb-sessions/list")
+    if data.get("ok") is False and data.get("reason") == "not-attached":
+        raise Skip("未接入主驾桥（本根没有 state\\bridge-token.txt）→ 会话本来就该是空的")
+    return f"会话 {len(first_list(data, 'items', 'sessions'))} 条"
+check("/wb-sessions/list", sessions_check)
 check("/wb-sessions/workspaces", lambda: f"工作区 {len(first_list(jget('/wb-sessions/workspaces'), 'workspaces', 'items'))} 个")
 
 
@@ -179,5 +194,7 @@ if args.bridge:
 failed = [r for r in results if not r[0]]
 for okflag, name, detail in results:
     print(f"  [{'ok' if okflag else 'FAIL'}]  {name}  —— {detail}")
-print(f"\n合计 {len(results)} 项，失败 {len(failed)} 项")
+for name, detail in skips:
+    print(f"  [skip]  {name}  —— {detail}")
+print(f"\n合计 {len(results) + len(skips)} 项，通过 {len(results) - len(failed)}，跳过 {len(skips)}，失败 {len(failed)} 项")
 sys.exit(1 if failed else 0)

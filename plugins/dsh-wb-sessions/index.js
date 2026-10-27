@@ -166,10 +166,10 @@ async function readJson(name) {
   }
 }
 
-let cache = { port: 0, token: '', at: 0 }
+let cache = { port: 0, token: '', attached: false, at: 0 }
 
 async function resolveMain() {
-  if (cache.port && cache.token && Date.now() - cache.at < 15000) return cache
+  if (Date.now() - cache.at < 15000) return cache
   const status = await readJson('main-status.json')
   // 排除**自己这一套**的端口，而不是写死 59430：
   // 测试床跑在 59480，主套跑在 59430；写死会让床永远连错/连不上（2026-10-27 修）。
@@ -182,18 +182,23 @@ async function resolveMain() {
   } catch {
     token = ''
   }
+  // 没有 token = **这一套工作台没有接入任何 harness**。这时绝不能靠"猜端口"去蹭别人的桥：
+  // 测试床（E:\WB-RC3）就吃过这个亏——它借了主套的 token，于是显示的是主套的 5 条会话，
+  // 看着像"接上了"，其实是张冠李戴（2026-10-27 用户指出）。未接入就该如实说未接入、会话为空。
+  // （token 由桥写进 `<根>\state\bridge-token.txt`，见 plugins\dsh-workbench-bridge）
+  if (!token) return { port: 0, token: '', attached: false, at: Date.now() }
   for (const port of ports) {
     try {
       const res = await fetch(`http://127.0.0.1:${port}/wb-bridge/status`, { signal: AbortSignal.timeout(2000) })
       if (res.ok) {
-        cache = { port, token, at: Date.now() }
+        cache = { port, token, attached: true, at: Date.now() }
         return cache
       }
     } catch {
       /* 下一个端口 */
     }
   }
-  return { port: 0, token, at: Date.now() }
+  return { port: 0, token, attached: false, at: Date.now() }
 }
 
 async function readBody(req, limit = 64 * 1024) {
@@ -238,7 +243,14 @@ export function apply(ctx) {
 
     if (url.pathname === `${PREFIX}/health`) {
       const main = await resolveMain()
-      sendJson(res, 200, { ok: true, mainPort: main.port, hasToken: Boolean(main.token) })
+      sendJson(res, 200, {
+        ok: true,
+        mainPort: main.port,
+        hasToken: Boolean(main.token),
+        // attached=false = 这一套工作台没接入任何 harness（测试床/还没 attach）。
+        // 界面据此显示「未接入主驾」，而不是把"空"或"401"当成故障。
+        attached: Boolean(main.attached),
+      })
       return
     }
 
@@ -250,6 +262,32 @@ export function apply(ctx) {
     }
 
     const main = await resolveMain()
+    if (!main.attached) {
+      // 未接入：SSE 也要给个"活着但空"的流，否则面板会不停重连。
+      if (url.pathname === `${PREFIX}/events`) {
+        res.writeHead(200, {
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-store',
+          connection: 'keep-alive',
+        })
+        const frame = () => {
+          try {
+            res.write(`event: tick\ndata: ${JSON.stringify({ at: new Date().toISOString(), attached: false, workbench: null, sessions: { count: 0, running: 0, latest: [] } })}\n\n`)
+          } catch { /* 客户端关了 */ }
+        }
+        frame()
+        const timer = setInterval(frame, 10000)
+        req.on('close', () => { clearInterval(timer); try { res.end() } catch { /* 忽略 */ } })
+        return
+      }
+      sendJson(res, 200, {
+        ok: false,
+        attached: false,
+        reason: 'not-attached',
+        error: '未接入主驾桥：本套工作台没有 state\\bridge-token.txt（测试床/还没 attach 时是正常的）',
+      })
+      return
+    }
     if (!main.port) {
       sendJson(res, 503, { ok: false, error: '找不到主 harness 端口（主驾没开？）' })
       return

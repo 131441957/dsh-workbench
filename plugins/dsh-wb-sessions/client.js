@@ -227,7 +227,12 @@ window.__ModuleLoader__.load({
     async function jsonFetch(path, init) {
       const res = await fetch(path, { headers: { accept: 'application/json' }, ...(init || {}) })
       const body = await res.json().catch(() => ({}))
-      if (!res.ok || body.ok === false) throw new Error(body.error || `HTTP ${res.status}`)
+      if (!res.ok || body.ok === false) {
+        const err = new Error(body.error || `HTTP ${res.status}`)
+        // 把响应体挂在错误上：调用方要区分"未接入主驾"（正常状态）和真错误
+        err.body = body
+        throw err
+      }
       return body
     }
 
@@ -347,6 +352,9 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState('')
       const [busy, setBusy] = useState(false)
       const [hasToken, setHasToken] = useState(true)
+      // attached=false：这一套工作台没接入任何 harness（测试床就是这样）。
+      // 面板要如实说"未接入"，而不是显示别人的会话、也不是报错。
+      const [attached, setAttached] = useState(true)
       const [live, setLive] = useState(null)
       const [query, setQuery] = useState('')
       const [sortMode, setSortMode] = useState('workspace')
@@ -371,7 +379,17 @@ window.__ModuleLoader__.load({
             setWsIndex(next)
           }
           setError('')
-        } catch (e) { setError(String(e.message || e)) }
+          setAttached(true)
+        } catch (e) {
+          // 「未接入主驾桥」是正常状态（测试床 / 还没 attach），不是错误：会话列表就是空的
+          if (e && e.body && e.body.reason === 'not-attached') {
+            setAttached(false)
+            setSessions([])
+            setError('')
+            return
+          }
+          setError(String(e.message || e))
+        }
       }
 
       const loadPage = async (id) => {
@@ -388,6 +406,7 @@ window.__ModuleLoader__.load({
           try {
             const health = await jsonFetch('/wb-sessions/health')
             setHasToken(Boolean(health.hasToken))
+            setAttached(Boolean(health.attached))
           } catch { /* 忽略 */ }
           await loadList()
         })()
@@ -464,10 +483,13 @@ window.__ModuleLoader__.load({
             h('button', { type: 'button', style: { ...styles.btn, marginLeft: 'auto', padding: '2px 8px', fontSize: 11, flex: '0 0 auto' }, onClick: loadList }, '刷新'),
           ),
           h('div', { style: styles.liveRow },
-            live && live.sessions
-              ? '主驾 ' + live.sessions.count + ' 会话 · ' + live.sessions.running + ' 运行'
-                + (live.workbench && typeof live.workbench.latencyMs === 'number' ? ' · ' + live.workbench.latencyMs + 'ms' : '')
-              : '等待主驾事件流…',
+            // 未接入就说未接入：别用"主驾 0 会话"糊过去，也别显示别人的会话
+            !attached
+              ? '未接入主驾桥 · 本套工作台没有桥 token'
+              : (live && live.sessions
+                ? '主驾 ' + live.sessions.count + ' 会话 · ' + live.sessions.running + ' 运行'
+                  + (live.workbench && typeof live.workbench.latencyMs === 'number' ? ' · ' + live.workbench.latencyMs + 'ms' : '')
+                : '等待主驾事件流…'),
           ),
           h('div', { style: styles.controls },
             h('input', {
@@ -488,7 +510,9 @@ window.__ModuleLoader__.load({
           ),
           h('div', { style: styles.list },
             groups.length === 0
-              ? h('div', { style: styles.notice }, sessions.length === 0 ? '没有会话（主驾没开或还没会话）' : '没有匹配的会话')
+              ? h('div', { style: styles.notice }, sessions.length === 0
+                ? (attached ? '没有会话（主驾没开或还没会话）' : '未接入主驾桥，没有会话可显示')
+                : '没有匹配的会话')
               : groups.map((g) => {
                   const collapsed = collapsedGroups.has(g.key)
                   return h('div', { key: g.key, style: styles.groupBlock },
@@ -524,7 +548,9 @@ window.__ModuleLoader__.load({
             current ? h('span', { style: styles.badge }, current.cwd || '') : null,
             h('button', { type: 'button', style: { ...styles.btn, marginLeft: 'auto', padding: '2px 8px', fontSize: 11 }, onClick: () => loadPage(selected) }, '读取历史'),
           ),
-          hasToken ? null : h('div', { style: styles.warn }, '主驾桥还没启用会话接口：重启一次主程序即可。'),
+          attached && hasToken ? null : h('div', { style: styles.warn },
+            attached ? '主驾桥还没启用会话接口：重启一次主程序即可。'
+              : '未接入主驾桥：这一套工作台没有 state\\bridge-token.txt（测试床 / 还没 attach 时是正常的）。装插件、看界面不受影响。'),
           error ? h('div', { style: styles.err }, error) : null,
           h('div', { style: styles.msgs },
             messages.length === 0
