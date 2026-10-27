@@ -1,22 +1,46 @@
 #!/usr/bin/env python3
-"""wb.py — DSH 工作台（Workbench）工具链 v0.2
+"""wb.py — DSH 工作台（Workbench）工具链
 
-只用标准库。工具用 Python，DSH 插件仍必须用 JS（Cordis 加载器只认 JS）。
+只用标准库（Python 3.10+）。工作台自己的插件必须用 JS（Cordis 加载器只认 JS），
+这个脚本是**运维工具**：装/启停/备份/装插件/分发/体检。
 
-用法：
-    python wb.py doctor                 # 环境/依赖/接口自检
-    python wb.py status                 # 主驾 + 工作台状态（只读）
-    python wb.py watch                  # 采集主驾快照 → state/main-status.json
-    python wb.py sync-app [--force]     # 把安装同步到 E:\\DSH-WORKBENCH\\app（独立整套）
-    python wb.py start [--with-watchdog]  # 无窗口启动工作台（默认带看门狗）
-    python wb.py stop                   # 停工作台（含看门狗）
-    python wb.py restart
-    python wb.py watchdog --main-pids 1,2  # 内部命令：主驾一死就把工作台关掉
-    python wb.py logs [-n 40]
+═══ 命令地图（按用途分组，全部幂等、可重复跑）══════════════════════════════════
+【装与修】  install（复制运行时 + 建 profile + 起服务 + 自愈）│ sync-app │ rollback
+【启与停】  start │ stop │ restart │ restart-safe（维护模式）│ suspend │ resume
+            start-safe（只禁第三方插件，界面还能开）
+【状态】    status │ info（机器可读 JSON）│ doctor │ paths │ caps │ compat
+            watch（采集主驾快照）│ api（接口基线）│ logs
+【备份】    backup │ backups [--json] │ restore --from <zip>
+【插件】    plugins list/install/add/remove │ plugin-info │ install-plugin
+            uninstall-plugin │ fix-ui │ plugin-search │ plugin-update [--apply]
+【体检】    preflight --install <目录>（三档：compatible/degraded/incompatible）
+【接入层】  attach / detach（把桥装进**目标** harness 的 profile，默认干跑）
+【分发】    pack │ prepublish │ registry [--refresh] │ sync-bed <根目录>
+【内部】    watchdog --main-pids 1,2 │ supervise │ serve
 
-约定：
-    主 harness home  E:\\DSH\\home        安装 E:\\SSS
-    工作台根          E:\\DSH-WORKBENCH   安装 app\\    home\\    port 59430
+═══ 铁律（改这个文件前先看）══════════════════════════════════════════════════
+① **绝不写主 harness**：E:\\SSS、E:\\DSH\\home（含 profiles\\desktop）只读。
+   唯一例外是 attach/detach 动目标 profile 的 package.json —— 而且默认干跑、要 --apply。
+② **绝不重装主 harness**：只升级；工作台的「同步运行时」是把主驾当前安装**复制**到 app\\。
+③ 根目录从 `__file__` 推导（可用 DSH_WORKBENCH_ROOT 覆盖），**不许写死路径**：
+   同一台机器会并存多套工作台（主套 E:\\DSH-WORKBENCH、测试床 E:\\WB-RC3）。
+④ 改任何**宿主侧**插件或主驾桥都要**重启对应 harness** 才生效；改 ui/ 只要刷新页面。
+⑤ 说"已经能用"之前必须有运行时证据（端口在听、/wb-ui 认领、页面模块表、boot-diag）。
+
+═══ 三个必须懂的内部机制 ═══════════════════════════════════════════════════════
+· safe_restart()：suspend → 等端口释放 → start → resume。
+  为什么：supervisor 看到 59430 空出来会**抢先**起一个实例，与新实例撞端口 →
+  EADDRINUSE → webserver 起不来 → 日志报 "startup failed: N required plugins did not activate"。
+  维护型重启一律走它，别用裸 restart。
+· 装前快照 + 失败回滚：install-plugin 先存 profile 三件套（package.json/pnpm-lock/ui-config/
+  installed.json）到 backups\\pre-install-<ts>，验证不过就 restore_install_snapshot() 回滚。
+· preflight 门禁：install 之前先跑 _preflight_verdict()，incompatible 直接中止
+  （一个字节运行时都不复制），degraded 先打印降级项再继续。
+
+═══ 验证入口 ═══════════════════════════════════════════════════════════════════
+    python tools\\test-http.py [--bridge]        # 接口 + 桥 17 项
+    python tools\\probe-ui.py --root <根>        # 页面自报（cssFrameApplied / sidebarVisibleRows）
+    python tools\\wb.py prepublish               # 公开前自检（退出码 0 = 硬性项全过）
 """
 from __future__ import annotations
 
@@ -35,7 +59,11 @@ import zipfile
 from pathlib import Path
 
 # ── 常量 ────────────────────────────────────────────────────────────────
+# 工作台根：从本文件位置推导（tools\wb.py → 上两级），可用环境变量覆盖。
+# 注意：这里**故意不写死**，因为本机同时存在主套与测试床两套工作台。
 WB_ROOT = Path(os.environ.get("DSH_WORKBENCH_ROOT") or Path(__file__).resolve().parent.parent)
+# 主驾的默认位置只是**兜底**：真正用哪个由 load_paths() 探测并缓存到 config.json。
+# （用户机器上主驾可能在别的盘；存量 config 失效时会自动重探。）
 MAIN_HOME = Path(r"E:\DSH\home")
 MAIN_INSTALL = Path(r"E:\SSS")
 
@@ -216,6 +244,13 @@ def detect_home(install: Path | None) -> tuple[Path | None, str]:
     return None, "未找到"
 
 
+# ── 路径探测：主驾安装目录 + 数据目录（写进 config.json 缓存）──────────────────
+# 判定顺序：参数显式指定 → config 缓存 → 自动探测（运行中进程 → 快捷方式 → 注册表 → 常见位置）。
+# 三条坑（都踩过）：
+#  ① 探测结果要连同**来源**一起存（installSource/homeSource），排障时才分得清"这个值是猜的还是人给的"。
+#  ② 重写 config 时先拷原 cfg 再更新 4 个键 —— 否则 port 之类自定义键会被抹掉。
+#  ③ **显式指定过的 home 不许被环境变量顶掉**：多套工作台共存时，一旦回退到 DSH_HOME，
+#     测试床就会去用主套的 home。判据：homeSource == 手动指定 且目录存在。
 def load_paths(redetect: bool = False, install: str | None = None, home: str | None = None,
                quiet: bool = True) -> dict:
     """读取/识别并缓存路径到 config.json；可用参数强制覆盖。"""
@@ -1009,6 +1044,10 @@ def safe_restart() -> bool:
     return up
 
 
+# ── 卸载插件：三处都要清干净，否则会有"幽灵插件"────────────────────────────────
+# ① profile 依赖与 bundles list ② node_modules 里的链接（含空的 scope 目录）
+# ③ state\ui-config.json 里这个插件登记的设置分区标题（keepNav + navByPlugin）
+# ④ 安装台账 installed.json ⑤ 维护模式重启并验证它真的不在了。
 def cmd_uninstall_plugin(name: str, no_restart: bool = False) -> int:
     """卸载一个插件并把痕迹清干净：profile / node_modules / 设置白名单 / 安装台账。"""
     if not name:
@@ -1176,6 +1215,16 @@ def client_module_id(pkg_dir: Path) -> str:
     return ""
 
 
+# ── 装插件：一条命令装完就能用（零代码接入的唯一入口）──────────────────────────
+# 流程：⓪ 静态闸门（client.js 里 `__ModuleLoader__.load({id})` 必须等于包名，否则整页白屏）
+#       → ⓪ 装前快照（profile 三件套 + 台账 → backups\pre-install-<ts>）
+#       → ① plugins add（写 profile + pnpm）→ ② 侦察 client 入口/槽位/设置分区
+#       → ③ 设置分区标题写进 state\ui-config.json 的 keepNav（裁剪白名单，卸载时按插件清）
+#       → ④ 写安装台账（包名/版本/来源/时间/client/槽位）→ ⑤ safe_restart
+#       → ⑥ 验证三件事：profile 里 bundle+linked、页面模块表含 <包>/client.js、本次启动无 EADDRINUSE
+#       失败 → restore_install_snapshot() 自动回滚到装前状态。
+# 坑：① 页面模块表里有 ≠ 客户端真的激活了（模块 id 不一致时白屏），所以⓪那道闸门必须在最前面；
+#     ② 很多插件只注册 conversation.* 槽位，工作台没会话界面 → 装得上但看不见（会提示）。
 def cmd_install_plugin(spec: str, keep_nav: str = "", no_restart: bool = False) -> int:
     """可视化插件统一安装：装 → 认出界面入口 → 登记白名单 → 安全重启 → 验证。
 
@@ -1575,6 +1624,13 @@ def _dist_version() -> str:
     return "0.1.0-" + time.strftime("%Y%m%d")
 
 
+# ── 分发：打一个可直接拷给客户的目录 dist\DSH-Workbench-<版本>\ ─────────────────
+# 收：tools / plugins / ui / seeds / 客户向 docs / config.template.json / README / MANIFEST.json
+# 不收：app（运行时副本太大，由客户机 install 时复制）、home、state、logs、backups、attic、ref、
+#       以及**内部文档**（前缀排除：handoff / upgrade-policy / plugin-manager-gaps / tools-plan /
+#       publish-checklist / sos- / test-round-）和**测试插件**（DIST_EXCLUDE_PLUGINS = dshmarket）。
+# 硬指标：MANIFEST.absolutePathHits 必须为 0（本机绝对路径会让客户机上跑不起来）。
+#   计数用单反斜杠字面量 `"E:" + chr(92) + "DSH-WORKBENCH"`——写成双反斜杠会数出 0（踩过）。
 def cmd_pack(out: str = "", include_test: bool = False, force: bool = False) -> int:
     """打一个可分发目录：源码/插件/界面/文档/种子，不含运行时、状态、备份与本机配置。"""
     ver = _dist_version()
@@ -2512,6 +2568,17 @@ Write-Output "shortcuts-ok"
         warn(f"快捷方式创建异常：{(out or '').strip()[:200]}")
 
 
+# ── 主流程：install（装 / 修 / 升级，幂等）───────────────────────────────────
+# 顺序（改之前先理解为什么是这个顺序）：
+#   ① 建目录 → ② **preflight 门禁**（不兼容直接中止，一个字节运行时都不复制；
+#      degraded 先打印降级项再继续）→ ③ sync-app 复制主驾运行时到 app\（不碰主驾）
+#   ④ ensure_profile（渲染 seeds，生成 bench profile）→ ⑤ sync_credentials（拷 API 凭据，
+#      否则页面会要求填 key）→ ⑥ pnpm plugin install → ⑦ 逐个核对 node_modules 里
+#      dsh-wb-* 的 package.json 是否真的可读（缺了就再装一次）
+#   ⑧ 起服务（端口被占会自动避让）→ ⑨ resume 自动伴随 → ⑩ **等 /wb-ui 就绪**：
+#      不就绪就自动 restart-safe 一次（实测"服务先起、插件后解析"会让三个插件全被跳过），
+#      仍失败才报错并指向 startup-*.log。
+# 坑：① 不要把启动放在 pnpm 之前；② 别指望"端口在听"就算成功——要验注入层。
 def cmd_install(force: bool = False) -> int:
     """自主安装 / 修复 / 升级：幂等，可以反复跑。"""
     head("工作台安装器")
@@ -2785,6 +2852,13 @@ def write_backup_readme() -> None:
         pass
 
 
+# ── 备份：整包快照（zip），并逐文件回读校验 sha256 ──────────────────────────────
+# 收：tools / plugins / seeds / docs / ui + config.json + bench profile 清单
+#     + BACKUP_STATE_FILES（plugin-notes.json / ui-config.json）
+# 不收：app（1.65GB 运行时副本，随时可 sync-app 重建）、home（工作台自己的 DSH_HOME）、
+#       logs、以及 .credentials.yaml（敏感，绝不进 zip）。
+# 顺序纪律：**先做干净基线，再搞破坏，再 restore**——反过来会把坏状态存进快照。
+# 快照比代码旧时 restore 会把代码一起回滚：修完代码要重做基线，旧快照是陷阱。
 def cmd_backup(note: str = "") -> int:
     """完整快照（含安装器/工具链），并回读校验每个文件的 sha256。"""
     head("完整快照")
@@ -2886,6 +2960,9 @@ def cmd_backups(as_json: bool = False) -> int:
     return 0
 
 
+# ── 还原：用快照覆盖 tools/plugins/seeds/docs/ui + profile 清单 ─────────────────
+# 不动 app\（运行时）与 home\ 里的数据；还原前会把当前文件另存到 backups\before-restore-<ts>\。
+# 还原完会顺带跑一次 install（所以它会重启工作台、刷新 token——页面要重新打开）。
 def cmd_restore(target: str = "latest") -> int:
     """从快照还原工具/插件/种子/文档/ui/profile（不动 app/ 与 home 数据）。"""
     head("从快照还原")
@@ -3155,6 +3232,15 @@ def is_our_workbench(port: int) -> bool:
         return False
 
 
+# ── 启动：把 app\ 那份运行时用 bench profile 起成服务 ─────────────────────────
+# 要点：
+# ① 端口：WB_PORT 被占就 pick_port 往上找，并 save_port 写回 config.json（客户机上 59430 常被占）。
+# ② 参数顺序是坑：启动器选项（--profile / --patch）必须排在 app 参数（--port / --no-open）**前面**，
+#    否则会报 `unknown option '--patch'`，表现为"端口 120 秒起不来"。
+# ③ 看门狗：WMI 起（父进程 WmiPrvSE，脱离主程序 Job），盯主驾**当次**监听 pid；
+#    主驾重启 → 工作台被关闭 → 由 supervisor 重新拉起（这是"主驾关则关"的实现）。
+#    测试床不想被牵连就传 with_watchdog=False。
+# ④ 起了之后别只看端口：注入层（/wb-ui）是否就绪才是"能用"的判据。
 def cmd_start(with_watchdog: bool = True, extra_args: list[str] | None = None) -> int:
     head("启动工作台")
     if not APP_DSH_CMD.exists():
