@@ -73,6 +73,12 @@ python tools\wb.py sync-bed "E:\WB-<版本>"     # 只比对内容，幂等；�
 ## 注意
 
 - **0.2.1-rc.3 把「设置」收进了「更多」菜单**：顶栏因此显示「更多」而不是「设置」——这是如实反映该版本界面，不是故障。
+- **rc.3 的设置只能人手点开（2026-10-27 实测定性）**：程序化点 `settings.launcher`（连带点账号菜单里的条目）都不出弹层
+  （`dialogs=0`、`menu=0`），只有真实鼠标才开。所以这一版**保留左栏**（收窄成 73px 窄条，只留底部账号菜单 56×32 可点），
+  顶栏不生成「设置类」按钮（否则就是点不开的死按钮）。判定是**运行时实测**的：页面加载后会静默试一次，
+  结论写进 `state\ui-config.json` 的 `settingsUnreachable`，之后直按结论走。
+- **alpha.1 相反**：左栏被“停到屏幕外”（`position:fixed; left:-9999px`，不是 `display:none`），
+  于是顶栏「设置」「插件配置分区」都能真的点开（实测 `attempts=1 / 419ms` 就开）。
 - 因此**藏原版侧栏不能只靠「设置」按钮当锚点**（rc.3 没有这个按钮，会让原版左栏整条露出来）。现在 `ui\workbench.js` 的 `findSidebarChain()` 在找不到「设置」时退回“任意一个 `*_panelRow`”当锚点；`boot-diag.json` 新增 `sidebarVisibleRows` 字段（0 = 藏干净），换版本时先看这个数字。
 - 床要 `--no-watchdog` 起（看门狗跟踪的是主驾**当次**启动的监听 pid，主驾一重启就把床关掉）。
 - **给床跑安装时一律带 `-NoShortcuts`**（或环境变量 `DSH_WB_NO_SHORTCUTS=1`）：否则会把桌面

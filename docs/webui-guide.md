@@ -130,3 +130,19 @@ python .\tools\wb.py install-plugin .\plugins\dsh-wb-demo
 | 布局回到原版三列 | 你的 CSS 选择器写死了前缀 → 改成 `[class*="_xxx"]`，看 `cssFrameApplied` |
 | 原版左栏露出来 | 看 `sidebarVisibleRows`；`workbench.js` 的 `findSidebarChain()` 锚点是否拿到 |
 | 想彻底还原 | 删 `ui\workbench.css` + `ui\workbench.js`，或 `wb.py suspend` 停掉整套 |
+
+## 7. 两条别踩的机制（2026-10-27 加）
+
+**① 左栏是"停到屏幕外"，不是 `display:none`。**
+设置入口（`[data-slot="sidebar.settings"]` / `settings.launcher`）长在左栏底部。左栏一旦
+`display:none`，那个按钮点了**不会弹设置** → 顶栏「设置」和所有插件配置入口全变死按钮。
+所以 `ui\workbench.css` 的 1.1 用的是 `position:fixed; left:-9999px`：不占位、看不见，但仍是
+“渲染中”的元素，程序化点击照常开弹层（弹层是 portal，开在屏幕正中）。
+外加一条：点插槽时要**点插槽里的 `<button>`**，那两个插槽本身是 `display:contents` 的 div。
+
+**② 静默探测期间的“隐形斗篷” `body.wb-probing`。**
+插件加在设置里的分区，只有弹层渲染出来才存在。所以页面加载后（且已装插件指纹变了时）会
+**不可见地**开一次设置、把分区标题扫出来、再关掉 —— 用户只会看到“装完插件刷新一下，顶栏就多了它的配置入口”。
+`workbench.css` 里 `body.wb-probing [class*="_overlay"] {visibility:hidden}` 就是那条斗篷
+（用 visibility 而不是 display:none，因为后者会让导航格量不到尺寸）。
+删掉它会看到设置闪一下；`boot-diag.json` 的 `bodyCloak` 必须是 `false`，否则说明斗篷没摘干净。
