@@ -54,7 +54,16 @@ if not url:
 edge = Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe")
 if not edge.exists():
     edge = Path(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe")
+# Edge 需要一个独立的 user-data-dir（避免抢用户正在用的 Edge 实例）。
+# 优先用 TEMP；TEMP 写不了（受限沙箱）就退到工作台自己的 state 目录。
 ud = Path(os.environ.get("TEMP") or ".") / f"_wb_probe_{ROOT.name}"
+try:
+    ud.parent.mkdir(parents=True, exist_ok=True)
+    (ud / "probe.ok").write_text("1", encoding="utf-8")
+    (ud / "probe.ok").unlink()
+except Exception:
+    ud = ROOT / "state" / f"_probe_edge_{ROOT.name}"
+    ud.parent.mkdir(parents=True, exist_ok=True)
 if ud.exists():
     import shutil
     shutil.rmtree(ud, ignore_errors=True)

@@ -2720,18 +2720,32 @@ def cmd_uninstall(purge: bool = False, do_detach: bool = False, apply: bool = Fa
                     cmd_detach(str(MAIN_HOME), p.name, True, True)
 
     if purge:
-        # 自己删自己不行：写一个临时脚本，延迟 2 秒后删根目录并自杀
-        tmp = Path(os.environ.get("TEMP", ".")) / f"wb-uninstall-{int(time.time())}.cmd"
-        tmp.write_text(
+        # 自己删自己不行：写一个临时脚本，延迟 2 秒后删根目录并自杀。
+        # TEMP 可能不可写（受限沙箱）→ 退到根目录里，再退到"请你手动删"。
+        script = (
             "@echo off\r\n"
             "timeout /t 2 /nobreak >nul\r\n"
             f'rmdir /s /q "{WB_ROOT}"\r\n'
-            f'del /f /q "%~f0"\r\n',
-            encoding="gbk", errors="replace")
-        subprocess.Popen(["cmd", "/c", str(tmp)], creationflags=DETACHED | NO_WINDOW,
-                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        ok("已启动清理脚本（2 秒后删除整个目录）")
-        info(f"目录：{WB_ROOT}（{size[1] / 1048576:.0f} MB）——几秒后自己消失")
+            f'del /f /q "%~f0"\r\n'
+        )
+        launched = False
+        for cand in (Path(os.environ.get("TEMP", ".")), WB_ROOT / "state"):
+            try:
+                tmp = cand / f"wb-uninstall-{int(time.time())}.cmd"
+                tmp.write_text(script, encoding="gbk", errors="replace")
+                subprocess.Popen(["cmd", "/c", str(tmp)], creationflags=DETACHED | NO_WINDOW,
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                launched = True
+                ok("已启动清理脚本（2 秒后删除整个目录）")
+                info(f"清理脚本：{tmp}")
+                break
+            except Exception as exc:  # noqa: BLE001
+                warn(f"{cand} 写不了清理脚本：{exc}")
+        if launched:
+            info(f"目录：{WB_ROOT}（{size[1] / 1048576:.0f} MB）——几秒后自己消失")
+        else:
+            warn("自动删除没启动（沙箱不允许写临时目录）")
+            info(f"请在文件管理器里直接删掉这个目录：{WB_ROOT}")
     else:
         head("卸载完成（目录保留）")
         info(f"要彻底删掉，直接删除这个目录：{WB_ROOT}")
@@ -2791,13 +2805,28 @@ $g.IconLocation = "{icon},0"
 $g.Save()
 Write-Output "shortcuts-ok"
 '''
-    out = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True,
-                         timeout=90, creationflags=RUNFLAGS, encoding="utf-8", errors="replace").stdout
-    if "shortcuts-ok" in (out or ""):
+    try:
+        proc = subprocess.run(["powershell", "-NoProfile", "-Command", "$ErrorActionPreference='Stop'; " + ps],
+                              capture_output=True, text=True, timeout=90, creationflags=RUNFLAGS,
+                              encoding="utf-8", errors="replace")
+        out = proc.stdout or ""
+        err = proc.stderr or ""
+        code = proc.returncode
+    except Exception as exc:  # noqa: BLE001
+        warn(f"快捷方式创建失败（不影响工作台本体）：{exc}")
+        return
+    # 必须同时看退出码：PowerShell 默认会把 Save() 的错误当非终止错误、继续往下跑，
+    # 只看 "shortcuts-ok" 会误判成功（2026-10-27 踩过）。
+    if code == 0 and "shortcuts-ok" in out:
         ok(f"快捷方式已就绪：{desktop}\\DSH 工作台.lnk")
         ok(f"开机自启已就绪：{startup}\\DSH 工作台（自动伴随）.lnk")
     else:
-        warn(f"快捷方式创建异常：{(out or '').strip()[:200]}")
+        # 在「工作区内修改」这类受限沙箱里，桌面/启动项在允许范围外 → 会被拒。
+        # 这不是致命错误：工作台本体照常可用，只是少了两个入口。
+        detail = (err or out).strip().splitlines()
+        hint = detail[-1][:160] if detail else f"退出码 {code}"
+        warn(f"快捷方式没建成（常见原因：沙箱限制写桌面/启动项）：{hint}")
+        info("工作台本体不受影响；要入口就在「完全权限」下再跑一次 install，或用 wb.py page 打开")
 
 
 # ── 主流程：install（装 / 修 / 升级，幂等）───────────────────────────────────
