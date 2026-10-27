@@ -1,6 +1,9 @@
 // tools/test-capabilities.mjs — 静态校验「按名调用」的能力声明
 // 目的：声明了的能力必须真能调到——route 必须落在本插件 index.js 注册的前缀之下，
 // 名字不能重复，method 只能是 GET/POST，参数白名单必须是数组。
+// 跑法：node tools/test-capabilities.mjs [plugins 目录]
+// 失败意味着：某个插件声明了能力，但 route 不在它自己的 PREFIX 下 / 名字重复 / method 不合法 /
+//            参数白名单不是数组 —— 这类声明会让主驾的 workbench_call 调到 404 或调错东西。
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 

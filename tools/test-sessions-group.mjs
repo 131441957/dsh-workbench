@@ -1,5 +1,8 @@
 // tools/test-sessions-group.mjs — 离线验证「按工作区」分组（假 React）
 // 回归点：组头必须是工作区名，绝不能是会话标题（曾按 sessionLabel 分组，每条会话自成一组建头全是标题）
+// 跑法：node tools/test-sessions-group.mjs [client.js 路径]
+// 失败意味着：分组键又被写成了"会话标题"之类的东西（组头会变成每条会话的标题），
+//            或者假 React 的 children 展平逻辑和真实 API 不一致（先怀疑测试）。
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 

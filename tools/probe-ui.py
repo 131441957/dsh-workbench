@@ -1,6 +1,22 @@
-"""在指定工作台实例上加载一次页面，读回 boot-diag 的关键字段（不截屏、不碰用户窗口）。
+"""在指定工作台实例上加载一次页面，读回 boot-diag 的关键字段。
 
-用法：python tools/probe-ui.py --root <工作台根> [--port 59430]
+为什么用它而不是截屏：截屏要抓窗口、会碰到用户正在用的屏幕，而且看不出"CSS 到底命中没有"。
+这里改用**独立 user-data-dir 的 Edge** 打开一次页面（不抢用户的标签/窗口，跑完按自己启动的
+pid 关掉），页面里注入的 workbench.js 会自己把诊断写到 state\\boot-diag.json，本脚本再读出来。
+
+用法：
+    python tools/probe-ui.py --root .                  # 当前这一套
+    python tools/probe-ui.py --root E:\\WB-<版本>       # 测试床
+
+关键字段（换 harness 版本后先看这两个）：
+    shellClasses.cssFrameApplied → "flex" 才算布局 CSS 命中（"grid" = 选择器没匹配上）
+    sidebarVisibleRows           → 必须是 0（原版侧栏没藏干净就会 >0）
+
+坑：
+ ① 入口 URL 的 token 是**一次性**的：拿旧 URL 再开一次会得到 "dsh web authentication required"，
+    所以每次都用 wb.current_url() 现取（它从日志尾部读最新那条）。
+ ② 别用 `msedge --headless --dump-dom` 验这套 SPA：页面保持长连接、load 事件不结束，会挂住。
+ ③ 只关自己启动的进程，绝不用 GetForegroundWindow() 去猜窗口（那会打到用户正在看的窗口）。
 """
 from __future__ import annotations
 

@@ -1,5 +1,7 @@
 // tools/test-plugin-notes.mjs — 离线验证「插件备注」在面板里的数据形状（假 React / 假模块加载器）
 // 覆盖：有备注的插件行带 note、没备注的是空串、非插件标签不受影响、按备注内容也能筛到、备注超长会被宿主截断（这里只验前端不过滤）
+// 跑法：node tools/test-plugin-notes.mjs [client.js 路径]
+// 失败意味着：插件面板每行的 note 字段/过滤逻辑变了（备注显示不出来、或按备注搜不到）。
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 

@@ -1,16 +1,32 @@
 #!/usr/bin/env python3
-"""wb_gui.py — 工作台安装器（可视化）
+"""wb_gui.py — 工作台安装器（可视化，客户自己点）
 
-用户自己点的安装/修复/启停/备份还原工具，不隐藏任何动作：
-  · 安装 / 修复        → 跑 wb.py install（幂等）
-  · 同步运行时(重装)    → wb.py install --force（旧运行时改名备份，可回滚）
-  · 回滚运行时          → wb.py rollback（只换 app/ 这份运行时副本）
-  · 立即备份 / 快照列表 / 还原快照 → wb.py backup / backups / restore
-  · 启动 / 停止 / 打开页面 / 暂停守护 / 恢复守护
-  · 看日志
+═══ 它是什么 ═══════════════════════════════════════════════════════════════════
+给**用户**用的图形壳：每个按钮等价于一条 `wb.py` 命令，动作不隐藏、日志实时滚。
+不用命令行也能装/修/备份/还原/回滚/启停。只用标准库 tkinter，无需 pip 装任何东西；
+用 pythonw.exe 启动时没有黑色控制台窗口（桌面「DSH 工作台 安装器」快捷方式就是这么配的）。
 
-只用标准库（tkinter），不需要额外安装依赖。启动时不要控制台窗口：
-  用 pythonw.exe 运行本文件，或点桌面「DSH 工作台 安装器」。
+═══ 按钮 → 命令对照 ═════════════════════════════════════════════════════════════
+  安装 / 修复                 → wb.py install                （幂等）
+  同步运行时（复制主驾安装）    → wb.py install --force        （旧 app\ 改名进 backups\，可回滚）
+  回滚运行时                   → wb.py rollback               （只换 app\，不动 home/）
+  立即备份…                    → wb.py backup --note <你填的>
+  快照列表                     → wb.py backups（界面用 --json 版本，不解析人类可读文本）
+  还原快照…                    → wb.py restore --from <你选的>（还原后问要不要安全重启）
+  启动 / 停止 / 打开页面        → start / stop / page
+  暂停 / 恢复自动伴随           → suspend / resume
+  重新探测路径                 → paths --redetect
+
+═══ 三条实现约定（改它之前先看）════════════════════════════════════════════════
+① **绝不阻塞 UI 线程**：所有命令跑在 worker 线程里，输出经 queue 回到 pump() 追加到日志框；
+   上一个没跑完就提示"正在忙"，不允许并发点。
+② **读状态走机器可读出口**：`wb.py info` / `backups --json` → json.loads。
+   千万别去解析给人看的 status 文本（曾因此版本全显示成 "?"）。
+③ **危险动作必须二次确认**：install --force、restore 都要先弹确认框并写清后果；
+   顶部那行「构建：…」是给客户排障用的（一眼看出安装器是不是旧版）。
+
+═══ 怎么验证 ═══════════════════════════════════════════════════════════════════
+    python tools\\wb_gui.py --selftest     # 开窗 400ms 自动关，验证不崩（退出码 0 + "gui selftest ok"）
 """
 from __future__ import annotations
 
@@ -25,6 +41,8 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, scrolledtext, simpledialog, ttk
 
+# 根目录从本文件位置推导（tools\wb_gui.py → 上两级）；可用环境变量覆盖。
+# 不要写死：同一台机器可能并存多套工作台（主套 / 测试床）。
 WB_ROOT = Path(os.environ.get("DSH_WORKBENCH_ROOT") or Path(__file__).resolve().parent.parent)
 WB_PY = WB_ROOT / "tools" / "wb.py"
 NODE_EXE = Path(os.environ.get("NODE_EXE") or r"E:\nodejs\node.exe")

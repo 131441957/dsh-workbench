@@ -1,10 +1,22 @@
-// tools/test-markdown.mjs — 离线验证会话面板的 Markdown 渲染器（假 React）
+// tools/test-markdown.mjs — 离线验证「Harness会话」面板的 Markdown 渲染器
+//
+// 保护什么：消息必须按 Markdown 渲染（标题/粗体/行内代码/代码块/列表/表格/引用/分隔线/链接），
+// 不能退化成 pre-wrap 纯文本——用户曾截图对比主驾界面，指出"很混乱"。
+//
+// 怎么做到不用浏览器：用 node:vm 造一个沙箱，塞一个**假 window.__ModuleLoader__** 把插件
+// client.js 的注册对象抓出来，再用**假 React**（createElement 只收集 type/props/children）跑渲染，
+// 最后断言产出的节点序列（kinds 顺序、表格行数、代码块内容）。
+//
+// 跑法：node tools/test-markdown.mjs [client.js 路径]
+// 失败意味着：渲染器坏了，或假 React 与真实 API 的差异变大了（先怀疑测试本身）。
 import { readFileSync } from 'node:fs'
 import vm from 'node:vm'
 
+// 默认路径指向本仓库的插件；换机器/换根目录时传参数覆盖
 const file = process.argv[2] || 'E:/DSH-WORKBENCH/plugins/dsh-wb-sessions/client.js'
 const code = readFileSync(file, 'utf8')
 
+// 抓注册对象：插件 client.js 的入口就是 window.__ModuleLoader__.load({ id, factory })
 let registration = null
 const sandbox = {
   window: { __ModuleLoader__: { load: (reg) => { registration = reg } } },
