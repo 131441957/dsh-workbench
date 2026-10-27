@@ -68,6 +68,23 @@
 
 还没验的（下一步）：真正的 `install`（要复制 1.7GB 运行时到副本）与副本里启动/打开页面。
 
+### 6.1 第二轮：真 install（2026-10-27，含 1.65GB 运行时复制）
+
+做法同上，但这次让 `install` 真跑：复制 `E:\SSS` → `state\client-sim2\wb\app`（**10009 文件 / 1.65 GB / 约 9 秒**），并用 `DSH_WB_NO_SHORTCUTS=1` 防止动到桌面快捷方式与开机启动项。
+
+| 检查项 | 结果 |
+|---|---|
+| 端口冲突自动避让 | ✅ 59430 被我方实例占着 → 自动改用 **59431** 并写进副本 config |
+| 种子渲染 | ✅ 副本 profile 里的 `link:` 全部指向**副本自己的** `plugins\...` |
+| 首次启动 | ⚠️ **服务起来了但三个插件全被跳过**（`dsh: skipping profile bundle … cannot resolve`），`/wb-ui` 404 |
+| 自愈 | ✅ 新加的逻辑等待 25 秒 → 自动 `restart-safe` → 注入层就绪 |
+| 页面 | ✅ 标题 `DSH 工作台`、`wb-ui-css/js` 已注入、`dsh-wb-api-browser` 与 `dsh-wb-sessions` 的 client 都在模块表；`dshmarket` 不在 |
+
+**这一轮抓出的真 bug**：`install` 存在「服务先起、插件后解析」的时序问题，第一次启动会**静默跳过所有插件**（客户会看到"工作台=裸 harness"）。
+修法（已落地）：①pnpm 之后逐个检查 `node_modules/<pkg>/package.json` 是否真的可读，缺了就再装一次；②启动后用 `wait_ui_ready()` 等 `/wb-ui` 应答（且 `uiDir` 必须是自己的），没就绪就**自动 restart-safe 一次**，仍失败则明确报错并提示看 `startup-*.log`。
+另加 `DSH_WB_NO_SHORTCUTS=1`：演练/CI/批量部署时不动用户桌面与开机启动项。
+
+
 ## 5. 验收标准（怎么算做完）
 
 - 装一个插件：一条命令，装前有快照，装后自动验证，失败自动回滚，台账里有记录

@@ -718,6 +718,16 @@ def http_json(url: str, timeout: float = 10.0):
         return json.loads(resp.read().decode("utf-8", "replace"))
 
 
+def wait_ui_ready(timeout: float = 20.0) -> bool:
+    """等注入层就绪：/wb-ui 能答且 uiDir 是我们自己的。用来发现"服务起来了但插件没加载"。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if is_our_workbench(WB_PORT):
+            return True
+        time.sleep(0.6)
+    return False
+
+
 def cmd_restart_safe() -> int:
     """维护模式重启（suspend → 等端口释放 → start → resume），供 GUI/客户用。"""
     head("安全重启工作台（维护模式）")
@@ -1963,6 +1973,10 @@ def cmd_resume() -> int:
 
 def make_shortcuts() -> None:
     """桌面「仅打开页面」+ 启动项「自动伴随」两个快捷方式（幂等，重复执行无副作用）。"""
+    if os.environ.get("DSH_WB_NO_SHORTCUTS"):
+        # 演练/CI/客户机批量部署时用：别去动用户桌面与开机启动项
+        info("跳过快捷方式（DSH_WB_NO_SHORTCUTS=1）")
+        return
     pyw = Path(sys.executable).with_name("pythonw.exe")
     exe = pyw if pyw.exists() else Path(sys.executable)
     script = str(Path(__file__).resolve())
@@ -2031,6 +2045,19 @@ def cmd_install(force: bool = False) -> int:
     )
     (ok if proc.returncode == 0 else warn)(f"插件依赖安装：退出码 {proc.returncode}")
 
+    # 装完必须确认插件真能解析：链接没就位时，服务会"起得来但插件全被跳过"
+    missing = [n for n in ("dsh-wb-api-browser", "dsh-wb-sessions", "dsh-wb-ui")
+               if not (WB_HOME / "profiles" / WB_PROFILE / "node_modules" / n / "package.json").exists()]
+    if missing:
+        warn(f"插件链接还没就位：{missing}，再跑一次 pnpm install")
+        subprocess.run(
+            ["cmd", "/c", str(APP_DSH_CMD), "plugin", "--profile", WB_PROFILE, "install"],
+            env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=900, creationflags=RUNFLAGS,
+        )
+        missing = [n for n in missing if not (WB_HOME / "profiles" / WB_PROFILE / "node_modules" / n / "package.json").exists()]
+        (ok if not missing else bad)(f"插件链接：{'全部就位' if not missing else '仍缺 ' + str(missing)}")
+
     make_shortcuts()
 
     if not listening_pids(WB_PORT):
@@ -2041,6 +2068,18 @@ def cmd_install(force: bool = False) -> int:
         cmd_resume()
     else:
         ok("自动伴随已在运行")
+
+    # 首次启动有时序问题（服务先起来、插件后解析）：这里自愈一次并明确报告
+    if not wait_ui_ready(25):
+        warn("注入层没就绪（/wb-ui 不应答）——自动重启一次")
+        cmd_restart_safe()
+        if wait_ui_ready(25):
+            ok("重启后注入层已就绪")
+        else:
+            bad("注入层仍未就绪：检查 home\\profiles\\bench\\node_modules 与 home\\logs\\startup-*.log")
+            return 1
+    else:
+        ok("注入层已就绪（/wb-ui 应 respawn）")
 
     head("自检")
     cmd_doctor()
