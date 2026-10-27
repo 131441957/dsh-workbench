@@ -19,6 +19,36 @@
     "client": {
       "platform": "web",
       "immediately": true
+    },
+    "workbench": {
+      "capabilities": [
+        {
+          "name": "sessions_list",
+          "description": "列出主驾全部 Harness 会话（标题 / 工作区 / 运行态 / 更新时间）",
+          "method": "GET",
+          "route": "/wb-sessions/list"
+        },
+        {
+          "name": "sessions_page",
+          "description": "读某个会话的历史消息（只含用户与助手消息）",
+          "method": "GET",
+          "route": "/wb-sessions/page",
+          "query": ["id", "max"]
+        },
+        {
+          "name": "sessions_send",
+          "description": "往某个主驾会话投递一条用户消息（mode=queue 排队 / steer 插入）",
+          "method": "POST",
+          "route": "/wb-sessions/send",
+          "body": ["sessionId", "text", "mode"]
+        },
+        {
+          "name": "workspaces",
+          "description": "主驾工作区注册表（路径 → 显示名，会话分组用）",
+          "method": "GET",
+          "route": "/wb-sessions/workspaces"
+        }
+      ]
     }
   }
 }

@@ -1016,8 +1016,9 @@ def cmd_caps() -> int:
     ]:
         ok(f"{name:<42} {desc}")
 
-    info("提示：自研插件将来在 package.json 的 dsh.workbench.capabilities 里声明能力，")
-    info("      主驾即可按名字调用；现在没有自研插件，所以这张表以路由为主。")
+    info("按名调用已打通：插件在 package.json 的 dsh.workbench.capabilities 里声明能力 →")
+    info("  工作台 /wb-api/capabilities 汇总 → 主驾桥 /wb-bridge/capabilities 与 /wb-bridge/call → 工具 workbench_call。")
+    info("  校验声明对不对：node tools\\test-capabilities.mjs（route 必须落在本插件 PREFIX 下）。")
     return 0
 
 

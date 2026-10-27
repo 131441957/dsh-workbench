@@ -47,6 +47,7 @@ curl  http://127.0.0.1:59430/wb-sessions/workspaces  # 工作区注册表（分�
 # 开机自诊断：每次加载页面 4.6 秒后自动写 state\boot-diag.json（按钮表 / hasPanel / clickLog / JS 报错 / console.error / **discovered 侧栏发现 / topbarTabs 顶栏按钮**）
 node E:\DSH-WORKBENCH\tools\test-sessions-group.mjs   # 分组回归（工作区 vs 标题）
 node E:\DSH-WORKBENCH\tools\test-plugin-notes.mjs     # 插件备注的行数据形状（note 字段/筛选/其它标签不受影响）
+node E:\DSH-WORKBENCH\tools\test-capabilities.mjs     # 能力声明校验（route 在本插件 PREFIX 下、名字唯一、method 合法）
 python E:\DSH-WORKBENCH\tools\wb.py plugins list        # 工作台插件（bundle/linked/spec）
 python E:\DSH-WORKBENCH\tools\wb.py plugins remove <名> # 卸载：删依赖+bundle → pnpm install
 ```
@@ -54,7 +55,7 @@ python E:\DSH-WORKBENCH\tools\wb.py plugins remove <名> # 卸载：删依赖+bu
 ## 待办
 1. **会话标题**：已完成，并已运行时复核（2026-10-26 22:48，`/wb-sessions/list` 三条标题均为中文正常：`检查 docs handoff.md 文件` / `DeepSeek harness 附属 Web 隔离方案` / `检查E盘可用插件`）。取值顺序=投影 `projections.values.title` → 日志兜底 → cwd 末段 → `#短号`。
 2. **GitHub 远程仓**：用户明确「暂不上传」。
-3. **能力注册表的“按名调用”通路**：等第一个**自研插件**出现再做（原则：只登记主驾没有的能力，`package.json` 的 `dsh.workbench.capabilities` 声明）。
+3. **能力「按名调用」通路：已完成（2026-10-27）**。链路：插件在 `package.json` 的 `dsh.workbench.capabilities` 声明 `{name, description, method, route, query?, body?}` → 工作台 `GET /wb-api/capabilities` 汇总（api-browser 宿主扫描 `plugins\*\package.json`）→ 主驾桥 `GET /wb-bridge/capabilities`（20 秒缓存，`?fresh=1` 强刷）与 `POST /wb-bridge/call`（带 `x-wb-token`，body `{name, params}`）→ 主驾工具 `workbench_call`（`name:"capabilities"` 即可列出全部）。校验脚本 `tools\test-capabilities.mjs`：route 必须落在本插件 `PREFIX` 之下、名字不可重复、method 只能 GET/POST。现有 8 条：`sessions_list / sessions_page / sessions_send / workspaces / plugins / notes / note_set / capabilities`。⚠️ 桥属主驾侧 host 代码，**改完要重启主程序才生效**。
 4. **已关闭（2026-10-26 用户拍板）**：主 profile 现有插件（除 `meow-memory` 外还有 `dsh-meow-panel` / `persona-preset` / 4 个第三方功能包）**一律不动、不隔离、不搬**。用户原话「不用，现在的插件都不用动，因为我暂时不会去修改它」。别再拿 A/B 方案来问。
 5. **已完成（2026-10-27）**：`/wb-web` 已随 `dsh-wb-web` 插件卸载（用户原话「那就给他撤掉，而且这个插件是用来测试工作台的，完全卸载掉也可以」）。顺带给 `wb.py plugins` 补上了 `remove` 动作（原来文档写了但没有实现）。剩可选项：细粒度会话事件推送（现在只有 tick 汇总）。
 6. **已完成（2026-10-27，用户同意后动的主 profile）**：主驾桥里的 `workbench_web_search` 工具已删除（连同指向 `/wb-web/search` 的 `wbSearch()`、schema、render、注册行与日志文案）；桥里现在只剩 `workbench_status / workbench_api / workbench_plugins` 三个工具。改动前备份在 `backups\pre-bridge-nowebsearch-20261027-1112\`（含 index.js / package.json / 主 profile package.json）。⚠️ **桥是主驾侧 host 代码，必须重启主程序才生效**；重启前主驾进程里仍是旧代码。

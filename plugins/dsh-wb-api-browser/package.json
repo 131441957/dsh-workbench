@@ -19,6 +19,35 @@
     "client": {
       "platform": "web",
       "immediately": true
+    },
+    "workbench": {
+      "capabilities": [
+        {
+          "name": "plugins",
+          "description": "工作台 bench profile 的插件清单（版本 / 是否进 bundles / 是否已链接）",
+          "method": "GET",
+          "route": "/wb-api/plugins"
+        },
+        {
+          "name": "notes",
+          "description": "读所有插件的备注",
+          "method": "GET",
+          "route": "/wb-api/notes"
+        },
+        {
+          "name": "note_set",
+          "description": "写一条插件备注（note 传空字符串即删除该条）",
+          "method": "POST",
+          "route": "/wb-api/notes",
+          "body": ["name", "note"]
+        },
+        {
+          "name": "capabilities",
+          "description": "列出工作台所有插件声明的能力（按名调用用这个查）",
+          "method": "GET",
+          "route": "/wb-api/capabilities"
+        }
+      ]
     }
   }
 }

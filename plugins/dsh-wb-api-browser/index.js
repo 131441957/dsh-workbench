@@ -1,6 +1,6 @@
 // dsh-wb-api-browser — host half.
 // 做两件事：①把工作台 state/ 里采集好的接口基线用 HTTP 暴露出来；②读写"插件备注"。
-import { readFile, writeFile, rename, mkdir } from 'node:fs/promises'
+import { readFile, writeFile, rename, mkdir, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 
 export const inject = ['webServer']
@@ -84,6 +84,54 @@ async function collectPlugins() {
   return { profileDir, bundles, plugins }
 }
 
+// ── 能力清单：各插件在自己 package.json 的 `dsh.workbench.capabilities` 里声明，
+//    主驾桥读这里，按名字调用（这就是「工作台插件能被主 harness 调用」的通用通路）。
+//    声明形状：{ name, description, method?('GET'|'POST'), route:'/wb-xxx/yyy', query?:['id'], body?:['text'] }
+function pluginsRoot() {
+  return join(process.env.DSH_WORKBENCH_ROOT || 'E:\\DSH-WORKBENCH', 'plugins')
+}
+
+async function collectCapabilities() {
+  let dirs = []
+  try {
+    dirs = await readdir(pluginsRoot())
+  } catch (error) {
+    return { capabilities: [], count: 0, error: `读不到 plugins 目录：${String(error && error.message ? error.message : error)}` }
+  }
+  const capabilities = []
+  const skipped = []
+  for (const dir of dirs.sort()) {
+    let meta
+    try {
+      meta = JSON.parse(await readFile(join(pluginsRoot(), dir, 'package.json'), 'utf8'))
+    } catch {
+      continue
+    }
+    const declared = meta && meta.dsh && meta.dsh.workbench && meta.dsh.workbench.capabilities
+    if (!Array.isArray(declared)) continue
+    for (const c of declared) {
+      if (!c || typeof c !== 'object') continue
+      const name = String(c.name || '').trim()
+      const route = String(c.route || '').trim()
+      if (!name || !route.startsWith('/')) {
+        skipped.push({ plugin: meta.name || dir, name: name || '(无名)', reason: '缺 name 或 route 不是绝对路径' })
+        continue
+      }
+      capabilities.push({
+        name,
+        plugin: meta.name || dir,
+        description: String(c.description || '').trim() || `${name}（${meta.name || dir}）`,
+        method: String(c.method || 'GET').toUpperCase() === 'POST' ? 'POST' : 'GET',
+        route,
+        query: Array.isArray(c.query) ? c.query.map(String) : [],
+        body: Array.isArray(c.body) ? c.body.map(String) : [],
+      })
+    }
+  }
+  capabilities.sort((a, b) => a.name.localeCompare(b.name))
+  return { capabilities, count: capabilities.length, skipped, scannedAt: new Date().toISOString() }
+}
+
 function sendJson(res, status, body) {
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
@@ -91,7 +139,6 @@ function sendJson(res, status, body) {
   })
   res.end(JSON.stringify(body))
 }
-
 export function apply(ctx) {
   const server = ctx.get('webServer')
   if (!server) {
@@ -113,6 +160,10 @@ export function apply(ctx) {
     }
     if (url.pathname === `${PREFIX}/plugins`) {
       sendJson(res, 200, await collectPlugins())
+      return
+    }
+    if (url.pathname === `${PREFIX}/capabilities`) {
+      sendJson(res, 200, await collectCapabilities())
       return
     }
     if (url.pathname === `${PREFIX}/notes`) {

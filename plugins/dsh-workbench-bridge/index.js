@@ -186,6 +186,63 @@ async function sessionPrompt(ctx, sessionId, text, mode) {
   return { ok: Boolean(value?.accepted), accepted: Boolean(value?.accepted) }
 }
 
+// ── 工作台能力「按名调用」──────────────────────────────────────────────
+// 工作台的每个插件可以在自己 package.json 的 dsh.workbench.capabilities 里声明能力，
+// 工作台宿主把它们汇总到 /wb-api/capabilities；这里按名字取出来，代理一次 HTTP。
+let capCache = { at: 0, data: null }
+
+async function workbenchCapabilities(force = false) {
+  if (!force && capCache.data && Date.now() - capCache.at < 20000) return capCache.data
+  try {
+    const res = await fetch(`http://127.0.0.1:${WB_PORT}/wb-api/capabilities`, { signal: AbortSignal.timeout(5000) })
+    const body = await res.json()
+    capCache = { at: Date.now(), data: body }
+    return body
+  } catch (error) {
+    // 失败不缓存，下次还试
+    return { capabilities: [], count: 0, error: `工作台不可达或未实现 /wb-api/capabilities：${String(error?.message ?? error)}` }
+  }
+}
+
+async function callCapability(name, params) {
+  const caps = await workbenchCapabilities()
+  const list = caps.capabilities || []
+  const cap = list.find((c) => c.name === name)
+  if (!cap) {
+    return { ok: false, capability: name, error: `没有这个能力：${name}`, available: list.map((c) => c.name) }
+  }
+  const p = params && typeof params === 'object' ? params : {}
+  let url = `http://127.0.0.1:${WB_PORT}${cap.route}`
+  const init = { method: cap.method, headers: { accept: 'application/json' }, signal: AbortSignal.timeout(60000) }
+  if (cap.method === 'GET') {
+    const qs = new URLSearchParams()
+    for (const key of cap.query || []) {
+      const value = p[key]
+      if (value !== undefined && value !== null && value !== '') qs.set(key, String(value))
+    }
+    const q = qs.toString()
+    if (q) url += (url.includes('?') ? '&' : '?') + q
+  } else {
+    const body = {}
+    for (const key of cap.body || []) if (p[key] !== undefined) body[key] = p[key]
+    init.headers['content-type'] = 'application/json'
+    init.body = JSON.stringify(body)
+  }
+  try {
+    const res = await fetch(url, init)
+    const text = await res.text()
+    let parsed
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      parsed = { raw: text.slice(0, 4000) }
+    }
+    return { ok: res.ok, capability: name, status: res.status, result: parsed }
+  } catch (error) {
+    return { ok: false, capability: name, error: String(error?.message ?? error) }
+  }
+}
+
 async function statusPayload() {
   const [live, build, mainStatus, health] = await Promise.all([
     readState('api-live.json'),
@@ -252,6 +309,24 @@ export function apply(ctx) {
       }
       if (url.pathname === `${PREFIX}/plugins`) {
         sendJson(res, 200, await readBenchPlugins())
+        return
+      }
+      // 能力清单（工作台插件自己声明的）+ 按名调用
+      if (url.pathname === `${PREFIX}/capabilities`) {
+        sendJson(res, 200, await workbenchCapabilities(url.searchParams.get('fresh') === '1'))
+        return
+      }
+      if (url.pathname === `${PREFIX}/call`) {
+        if (req.method !== 'POST') { sendJson(res, 405, { ok: false, error: 'POST only' }); return }
+        if (!tokenOk(req)) { sendJson(res, 401, { ok: false, error: 'bad token' }); return }
+        try {
+          const body = await readBody(req)
+          const name = String(body.name || '').trim()
+          if (!name) { sendJson(res, 400, { ok: false, error: '需要 name' }); return }
+          sendJson(res, 200, await callCapability(name, body.params))
+        } catch (error) {
+          sendJson(res, 500, { ok: false, error: String(error?.message ?? error) })
+        }
         return
       }
       // 会话桥：写操作一律要 token（工作台启动时读 state\bridge-token.txt）
@@ -468,10 +543,55 @@ export function apply(ctx) {
       },
     }
 
+    // 按名调用工作台插件的能力（能力名由插件自己声明，主驾这边不硬编码）
+    const callTool = {
+      name: 'workbench_call',
+      description:
+        '按名字调用工作台插件声明的能力。先用 name="capabilities" 查有哪些能力（sessions_list / sessions_page / sessions_send / workspaces / plugins / notes / note_set …），再带 params 调用。',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['name'],
+        properties: {
+          name: { type: 'string', description: '能力名；传 capabilities 可列出全部' },
+          params: { type: 'object', additionalProperties: true, description: '能力参数（GET 走 query 字段，POST 走 body 字段）' },
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: true,
+          required: ['ok'],
+          properties: {
+            ok: { type: 'boolean' },
+            capability: { type: 'string' },
+            status: { type: 'number' },
+            result: { type: 'object' },
+            error: { type: 'string' },
+            available: { type: 'array', items: { type: 'string' } },
+          },
+        },
+        render: (_args, value) => {
+          if (!value.ok) {
+            const extra = Array.isArray(value.available) && value.available.length ? `\n可用能力：${value.available.join(', ')}` : ''
+            return [{ type: 'text', text: `工作台能力 ${value.capability ?? ''} 调用失败：${value.error ?? '未知错误'}${extra}` }]
+          }
+          return [{ type: 'text', text: `工作台能力 ${value.capability} 返回（HTTP ${value.status}）：\n${JSON.stringify(value.result).slice(0, 1200)}` }]
+        },
+      },
+      async execute(args) {
+        return await callCapability(String(args.name || '').trim(), args.params)
+      },
+      presentCall() {
+        return { card: 'generic', title: 'workbench_call', kind: 'read' }
+      },
+    }
+
     ctx.effect(() => tools.register(statusTool))
     ctx.effect(() => tools.register(apiTool))
     ctx.effect(() => tools.register(pluginsTool))
-    ctx.logger?.info?.('wb-bridge: tools workbench_status / workbench_api / workbench_plugins ready')
+    ctx.effect(() => tools.register(callTool))
+    ctx.logger?.info?.('wb-bridge: tools workbench_status / workbench_api / workbench_plugins / workbench_call ready')
   } else {
     ctx.logger?.warn?.('wb-bridge: tools service unavailable')
   }
