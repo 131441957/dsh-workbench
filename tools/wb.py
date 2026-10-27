@@ -769,6 +769,18 @@ def detect_ui_entries(pkg: Path) -> dict:
                             break
             if isinstance(title, str) and title.strip() and title.strip() not in out["titles"]:
                 out["titles"].append(title.strip())
+    # 多语言去重：同一个设置分区在 locale 里会有 en/zh 两个标题（例如
+    # 「Session Manager」+「会话管理」）。两个都登记 → 顶栏出现两个按钮，
+    # 而实际渲染的只有当前语言那个，另一个点了找不到分区（2026-10-27 实测 dsh-chat-manager）。
+    # 规则：只要有中文标题，就只留中文那份（本机/客户都是中文界面）；否则留第一个。
+    if len(out["titles"]) > 1:
+        def _cjk(s: str) -> bool:
+            return any("\u4e00" <= ch <= "\u9fff" for ch in s)
+        cjk_titles = [t for t in out["titles"] if _cjk(t)]
+        keep = cjk_titles[:1] if cjk_titles else out["titles"][:1]
+        dropped = [t for t in out["titles"] if t not in keep]
+        out["titles"] = keep
+        out["titlesDropped"] = dropped
     return out
 
 

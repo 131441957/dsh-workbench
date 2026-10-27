@@ -429,12 +429,30 @@
     setTimeout(fire, 700)
   }
 
+  // 打开「设置」——跨版本差异：0.2.1-alpha.1 顶栏/侧栏有独立「设置」按钮，
+  // 而 0.2.1-rc.3 把设置收进了「更多」菜单里（没有独立按钮）。
+  // 所以这里先直点，找不到就点「更多」再点里面的设置（2026-10-27 在 rc.3 床上踩到）。
+  const openSettingsPanel = () => {
+    const direct = findButton('设置')
+    if (direct) { direct.click(); return true }
+    for (const label of ['更多', 'More']) {
+      const more = findButton(label)
+      if (!more) continue
+      more.click()
+      setTimeout(() => {
+        const inside = findButton('设置')
+        if (inside) inside.click()
+      }, 250)
+      return true
+    }
+    return false
+  }
+
   // 打开「设置」并切到某个分区（插件自带分区的顶栏入口用它）。
   // 为什么这么绕：插件分区是设置在弹层里渲染的，没有独立入口；
   // 我们能做的正确事就是"打开设置 + 点它左侧导航里那一格"，而不是伪造一个面板。
   const openSettingsSection = (title) => {
-    const openBtn = findButton('设置')
-    if (openBtn) openBtn.click()
+    openSettingsPanel()
     const step = (attempt) => {
       const overlay = settingsRoot()
       // 优先在设置容器里找；找不到就退到全文档（有些版本导航栏不在 overlay 内部）
@@ -452,7 +470,7 @@
       else {
         // 分区已经不在了（插件被卸载）→ 把这个死按钮从顶栏拿掉，别让用户点到空气
         const cfg = state.uiConfig
-        if (cfg && Array.isArray(cfg.extra) && cfg.extra.includes(title)) {
+        if (pool.length > 0 && cfg && Array.isArray(cfg.extra) && cfg.extra.includes(title)) {
           cfg.extra = cfg.extra.filter((t) => t !== title)
           refreshTopbar()
           postSections(cfg.extra, true)
@@ -727,10 +745,8 @@
   let probed = false
   const probeSettings = () => {
     if (probed) return
-    const openBtn = findButton('设置')
-    if (!openBtn) return
+    if (!openSettingsPanel()) return
     probed = true
-    openBtn.click()
     setTimeout(() => {
       pruneSettings()
     maskUnknownMain() // 先裁剪，再导出，导出的结果就是最终可见状态
@@ -954,8 +970,7 @@
           return
         }
         // mode=settings：点开设置 → 等它渲染 → 找**第一个非内置分区** → 点它
-        const openBtn = findButton('设置')
-        if (openBtn) openBtn.click()
+        openSettingsPanel()
         setTimeout(() => {
           const overlay = settingsRoot()
           const cells = overlay ? allBySuffix('navCell', overlay) : []
@@ -971,6 +986,20 @@
           }
         }, 1200)
       }, 2200)
+      // 自检时顺带把设置弹层的 DOM 导到 state\settings-<版本>.html，
+      // 方便跨版本对照导航区结构（rc.3 的导航格子类名和 alpha.1 不一样）。
+      setTimeout(() => {
+        try {
+          const overlay = bySuffix('overlay')
+          if (overlay) {
+            fetch('/wb-ui/dom', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ kind: 'html', name: 'settings-selftest.html', html: overlay.outerHTML }),
+            }).catch(() => {})
+          }
+        } catch { /* 忽略 */ }
+      }, 3200)
       setTimeout(bootDiag, 4500)
     } else {
       setTimeout(bootDiag, 4600)
