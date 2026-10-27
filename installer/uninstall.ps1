@@ -51,6 +51,11 @@ if (-not (Test-Path $wb)) {
   exit 1
 }
 
+# 关键：把**当前目录挪出工作台根**。-Purge 的延迟删除脚本由 wb.py 写，
+# 但 Windows 只要还有进程 cwd 在目标树下，rmdir 就会「删得掉文件、删不掉目录」
+# （双击 uninstall.cmd 的默认行为就是 cd 进根目录 → 2026-10-27 真机验收踩到）。
+Set-Location $env:TEMP
+
 $args = @($wb, 'uninstall')
 if ($Apply)  { $args += '--apply' }
 if ($Purge)  { $args += '--purge' }

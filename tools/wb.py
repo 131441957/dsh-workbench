@@ -2786,7 +2786,14 @@ def cmd_uninstall(purge: bool = False, do_detach: bool = False, apply: bool = Fa
         return 0
 
     # ④ 真执行
-    cmd_suspend()
+    # 只有**这个目录里真装过工作台**才去停服务/守护；否则（比如客户刚解压还没 install，
+    # 或者只是想删掉这个空壳目录）一律不停，避免误伤同一台机器上的其它实例。
+    # 2026-10-27 真机事故：在未安装的目录里跑 --apply --purge，把发行版主套的进程杀了。
+    installed_here = APP_DSH_CMD.exists() or (WB_HOME / "profiles" / WB_PROFILE / "package.json").exists()
+    if installed_here:
+        cmd_suspend()
+    else:
+        info("本目录里没有安装过工作台（没有 app\\ 或 profile）→ 跳过停服务，只清快捷方式与文件")
     removed = 0
     for lnk in ours:
         try:
@@ -2807,11 +2814,21 @@ def cmd_uninstall(purge: bool = False, do_detach: bool = False, apply: bool = Fa
     if purge:
         # 自己删自己不行：写一个临时脚本，延迟 2 秒后删根目录并自杀。
         # TEMP 可能不可写（受限沙箱）→ 退到根目录里，再退到"请你手动删"。
+        #
+        # ⚠️ 必须先 `cd /d "%TEMP%"` 再删：双击 uninstall.cmd 时**调用方的当前目录就在根目录里**，
+        # Windows 只要有任何进程 cwd 在目标树下，rmdir 就会「删得掉文件、删不掉目录」——
+        # 2026-10-27 真机验收踩到（目录剩个空壳）。加 cwd 跳出 + 三轮重试兜住句柄延迟。
         script = (
             "@echo off\r\n"
+            'cd /d "%TEMP%" 2>nul\r\n'
             "timeout /t 2 /nobreak >nul\r\n"
-            f'rmdir /s /q "{WB_ROOT}"\r\n'
-            f'del /f /q "%~f0"\r\n'
+            f'for /l %%i in (1,1,3) do (\r\n'
+            f'  rmdir /s /q "{WB_ROOT}" 2>nul\r\n'
+            f'  if not exist "{WB_ROOT}" goto :gone\r\n'
+            f'  timeout /t 1 /nobreak >nul\r\n'
+            f')\r\n'
+            f':gone\r\n'
+            f'del /f /q "%~f0" 2>nul\r\n'
         )
         launched = False
         for cand in (Path(os.environ.get("TEMP", ".")), WB_ROOT / "state"):
@@ -3044,6 +3061,15 @@ def cmd_install(force: bool = False) -> int:
 
     head("自检")
     cmd_doctor()
+    # 首次安装顺手采一次接口基线：否则「状态」面板的「profile 分层」标签是空的
+    # （2026-10-27 在 v0.1.1 真机验收时发现 /wb-api/build 返回 503，客户会以为是坏的）。
+    # 采集失败不影响安装——面板里还有「刷新基线」按钮。
+    if not (STATE_DIR / "api-build.json").exists():
+        try:
+            if cmd_api() == 0:
+                ok("已采集接口基线：state\\api-build.json")
+        except Exception as exc:  # noqa: BLE001
+            warn(f"接口基线没采成（不影响使用，面板里点「刷新基线」即可）：{exc}")
     url = current_url()
     if url:
         ok(f"入口：{url}")
@@ -3707,6 +3733,33 @@ def cmd_start(with_watchdog: bool = True, extra_args: list[str] | None = None) -
     return 0
 
 
+def pid_exe_path(pid: int) -> str:
+    """取进程的可执行文件路径（只读，用来判断"这个进程是不是我们这一套的"）。
+
+    铁律：杀进程只能按 ExecutablePath 判断归属，别按命令行（命令行带 cwd，会误杀）。
+    这里只取路径，不做杀操作。
+    """
+    try:
+        ps = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             f"(Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}').ExecutablePath"],
+            capture_output=True, text=True, timeout=20, creationflags=RUNFLAGS,
+            encoding="utf-8", errors="replace",
+        ).stdout
+        return (ps or "").strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def pid_belongs_to_root(pid: int) -> bool:
+    """这个 pid 是不是**本根**的进程？判据 = exe 路径在 <本根>\\app\\ 下（或 python 跑本根的 wb.py）。"""
+    path = pid_exe_path(pid).lower().replace("/", "\\")
+    if not path:
+        return False
+    root = str(WB_ROOT).lower().replace("/", "\\").rstrip("\\")
+    return path.startswith(root + "\\")
+
+
 def cmd_stop() -> int:
     head("停止工作台")
     pids = read_pids()
@@ -3717,10 +3770,18 @@ def cmd_stop() -> int:
             kill_tree(pid)
             ok(f"已结束 {name}（pid={pid}）")
             stopped = True
+    # 端口上的残留进程：**必须先确认归属再杀**。
+    # 2026-10-27 真机事故：在一个"还没装过工作台"的目录里跑 uninstall --apply，
+    # WB_PORT 退回默认 59430，这里无条件 kill 了端口监听者 → 把**发行版主套**的进程杀了。
+    # 现在两条判据取或：①/wb-ui 回报的 uiDir 是我们；②该 pid 的 exe 在本根 app\ 下。
     for pid in listening_pids(WB_PORT):
-        kill_tree(pid)
-        ok(f"已结束占用 {WB_PORT} 的进程（pid={pid}）")
-        stopped = True
+        if is_our_workbench(WB_PORT) or pid_belongs_to_root(pid):
+            kill_tree(pid)
+            ok(f"已结束占用 {WB_PORT} 的进程（pid={pid}）")
+            stopped = True
+        else:
+            warn(f"端口 {WB_PORT} 上跑的不是本套工作台（pid={pid}，exe={pid_exe_path(pid) or '?'}）——不动它；"
+                 f"如果你要让这一套用别的端口，改 config.json 的 port 或设 DSH_WORKBENCH_PORT")
     # 只清 serve/watchdog，别把 supervisor 的记录一起抹掉
     pids = read_pids()
     pids["serve"] = 0

@@ -66,7 +66,17 @@ check("/wb-ui 认领自己", claim_self)
 check("/wb-api/health", lambda: f"ok={jget('/wb-api/health').get('ok')}")
 check("/wb-api/plugins", lambda: "插件 " + ",".join(p["name"] for p in jget("/wb-api/plugins")["plugins"]))
 check("/wb-api/live", lambda: f"服务 {len(jget('/wb-api/live').get('services') or [])} 个")
-check("/wb-api/build", lambda: f"层 {len(jget('/wb-api/build').get('layers') or [])} 个")
+def build_check():
+    # 全新安装还没采过基线时 /wb-api/build 会 503（state\api-build.json 不存在）。
+    # 这是预期的首次状态（面板里有「刷新基线」按钮，装完也会自动采一次），判 SKIP 而不是 FAIL。
+    port = wb.WB_PORT
+    try:
+        return f"层 {len(jget('/wb-api/build').get('layers') or [])} 个"
+    except urllib.error.HTTPError as exc:
+        if exc.code == 503:
+            raise Skip("还没采接口基线（state\\api-build.json 不存在）→ 页面「状态 → profile 分层」点「刷新基线」，或跑 wb.py api")
+        raise
+check("/wb-api/build", build_check)
 check("/wb-api/status", lambda: "ok" if jget("/wb-api/status").get("workbench") else "缺 workbench 字段")
 check("/wb-api/capabilities", lambda: f"能力 {jget('/wb-api/capabilities').get('count')} 条")
 check("/wb-api/notes", lambda: "备注 " + str(len(jget("/wb-api/notes").get("notes") or {})) + " 条")
