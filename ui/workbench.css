@@ -149,11 +149,14 @@ body.wb-probing [class*="_modal"] {
  * 三、可自由发挥的地方（下面都是"示例"，删掉不影响工作台功能）
  * ────────────────────────────────────────────────────────────────────────── */
 
-/* 3.1 右下角水印：用来肉眼确认注入层生效。
- *     端口由 workbench.js 从 /wb-ui/config 读出后写入 CSS 变量 --wb-port。
- *     想换位置改 right/bottom；不想要就整块删掉。 */
+/* 3.1 右下角水印：用来肉眼确认注入层生效，并显示**工作台包版本**（如 v0.1.1 · 59430）。
+ *     注意：包版本 ≠ harness 运行时版本（0.2.1-alpha.1），后者在「状态」面板看。
+ *     ⚠️ 文字内容由 workbench.js 用**字面量**写进 `body::after{content:"…"}`：
+ *        CSS 的 `content` 只接受字符串，`content: "工作台 " var(--wb-port)` 替换后是裸数字，
+ *        整条声明会失效（2026-10-27 查出来的老 bug：这行以前一直没生效、水印从没显示过）。
+ *     想换位置改 right/bottom；不想要就整块删掉（JS 会自动跳过）。 */
 body::after {
-  content: "工作台 " var(--wb-port, "59430");
+  /* 文字由 workbench.js 的 applyWatermark() 用字面量补上（这里不写 content，写了也白写） */
   position: fixed;
   right: 12px;
   bottom: 10px;

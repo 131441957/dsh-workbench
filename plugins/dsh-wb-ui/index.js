@@ -30,7 +30,7 @@
  *   curl http://127.0.0.1:59430/wb-ui           → uiDir 必须是**这一份**的 ui 目录
  *   wb.py status / python tools\test-http.py     → 17 项里包含 /wb-ui 认领与页面注入检查
  * ══════════════════════════════════════════════════════════════════════════ */
-import { readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -68,6 +68,24 @@ function fileInfo(name) {
 // 取不到才退回 `<根目录>\home` + bench。绝不写死 E:\ 路径（同一台机器可能多套工作台）。
 const HOME_DIR = process.env.DSH_HOME || join(WB_ROOT, 'home')
 const PROFILE = process.env.DSH_PROFILE || 'bench'
+
+// 「工作台**包**版本」——注意它和 harness 运行时版本（0.2.1-alpha.1 那种）是两套编号。
+// 来源优先级：根目录 VERSION 文件 → dist 里最新的分发目录名 → 'dev'。
+// 为什么要暴露给页面：用户在页面上看到的应该是"我装的是哪一版工作台"，
+// 而不是只能去 GitHub 对（2026-10-27 用户报"桌面入口显示的版本和 github 不一致"，就是缺这个）。
+function packageVersion() {
+  try {
+    const v = readFileSync(join(WB_ROOT, 'VERSION'), 'utf8').replace(/^\uFEFF/, '').trim()
+    if (v) return v
+  } catch { /* 没有 VERSION：可能是源码工作区 */ }
+  try {
+    const names = readdirSync(join(WB_ROOT, 'dist'))
+      .filter((n) => n.startsWith('DSH-Workbench-'))
+      .sort()
+    if (names.length) return names[names.length - 1].replace('DSH-Workbench-', '').replace(/\.zip$/, '')
+  } catch { /* 没有 dist */ }
+  return 'dev'
+}
 
 // 已装插件指纹（name@version 排序拼接）。
 // 干什么用：页面靠它判断"要不要静默扫一次设置分区"。只注册 `settings.section`、
@@ -269,6 +287,8 @@ export function apply(ctx) {
         ok: true,
         keepNav,
         port,
+        // 包版本（页面水印/顶栏品牌用它显示"这一套是哪一版"）
+        version: packageVersion(),
         fingerprint,
         probeNeeded: Boolean(fingerprint) && fingerprint !== scanned,
         settingsUnreachable: Boolean(cfg.settingsUnreachable),

@@ -124,6 +124,26 @@
         defaulted: Boolean(document.getElementById('wb-topbar')) && state.activeMarked ? true : false,
         buttons,
         topbarTabs: Array.from(document.querySelectorAll('#wb-topbar button.wb-tab')).map((b) => b.textContent),
+        // 顶栏品牌后缀：应该是 "v<包版本> · <端口>"（包版本来自 VERSION，别和 harness 运行时版本混）
+        version: state.version || null,
+        brand: (document.querySelector('#wb-topbar .wb-brand small') || {}).textContent || null,
+        // 右下角水印的实际内容（"工作台 v0.1.1 · 59430"）——用 computed style 取，别靠猜 CSS 变量
+        watermark: (() => {
+          try { return getComputedStyle(document.body, '::after').content || null } catch { return null }
+        })(),
+        watermarkDebug: (() => {
+          try {
+            const css = document.getElementById('wb-ui-css')
+            const text = css ? css.textContent : ''
+            const cs = getComputedStyle(document.body)
+            return {
+              ruleInjected: /body\s*::after/.test(text),
+              bodyDisplay: cs.display,
+              versionVar: cs.getPropertyValue('--wb-version').trim(),
+              portVar: cs.getPropertyValue('--wb-port').trim(),
+            }
+          } catch (e) { return { error: String(e && e.message ? e.message : e) } }
+        })(),
         pluginSectionTabs: ((state.uiConfig && state.uiConfig.extra) || []).slice(0, 12),
         selftestHit: state.selftestHit || null,
         settingsOpen: settingsNavVisible(),
@@ -733,6 +753,28 @@
     return btn
   }
 
+  // 顶栏品牌后缀：**包版本** · 端口（版本还没读到时只显示端口）。
+  // 包版本来自 /wb-ui/config 的 version（宿主读根目录 VERSION），与 harness 运行时版本无关。
+  const brandSuffix = () => (state.version ? `v${state.version} · ${state.port || 59430}` : String(state.port || 59430))
+
+  // 右下角水印的文字：**必须用字面量字符串写进 content**。
+  // CSS 的 `content` 只接受字符串——`content: "工作台 " var(--wb-port)` 替换出来是裸数字 59430，
+  // 整条声明会失效（`getComputedStyle(body,'::after').content === 'none'`）。
+  // 2026-10-27 查出来的老 bug：以前水印从头到尾没显示过。
+  const applyWatermark = () => {
+    try {
+      let el = document.getElementById('wb-watermark')
+      if (!el) {
+        el = document.createElement('style')
+        el.id = 'wb-watermark'
+        document.head.appendChild(el)
+      }
+      const port = state.port || 59430
+      const text = state.version ? `工作台 v${state.version} · ${port}` : `工作台 · ${port}`
+      el.textContent = `body::after{content:"${text}"}`
+    } catch { /* 水印失败不影响页面 */ }
+  }
+
   const buildTopbar = (plan) => {
     const existing = document.getElementById('wb-topbar')
     if (existing) existing.remove()
@@ -741,7 +783,7 @@
     bar.dataset.wbSig = plan.all.map((t) => t.label).join('|')
     const brand = document.createElement('div')
     brand.className = 'wb-brand'
-    brand.innerHTML = `DSH 工作台<small>${state.port || 59430}</small>`
+    brand.innerHTML = `DSH 工作台<small>${brandSuffix()}</small>`
     bar.appendChild(brand)
 
     for (const tab of plan.left) {
@@ -1172,6 +1214,16 @@
       // 与"上次扫过时的指纹"（state\ui-config.json 的 scanned）。这里只负责接住结论。
       state.uiConfig.fingerprint = typeof body.fingerprint === 'string' ? body.fingerprint : ''
       state.uiConfig.probeNeeded = Boolean(body.probeNeeded)
+      // 「工作台包版本」（0.1.1 这种），跟 harness 运行时版本（0.2.1-alpha.1）是两套编号。
+      // 顶栏品牌与右下角水印都显示它，这样用户在页面上就能确认自己装的是哪一版。
+      if (body && typeof body.version === 'string' && body.version.trim()) {
+        state.version = body.version.trim()
+        document.documentElement.style.setProperty('--wb-version', 'v' + state.version)
+        const small = document.querySelector('#wb-topbar .wb-brand small')
+        if (small) small.textContent = brandSuffix()
+        const brand = document.querySelector('#wb-topbar .wb-brand')
+        if (brand) brand.setAttribute('title', `工作台包 v${state.version} · harness 运行时见「状态」面板`)
+      }
       // 「这个版本能不能程序化打开设置」是运行时实测出来的结论，落盘在 ui-config.json 里：
       // true（如 rc.3）→ 保留左栏让用户自己点；false/未测 → 左栏停到屏幕外，顶栏按钮直接可用。
       state.settingsUnreachable = Boolean(body.settingsUnreachable)
@@ -1180,8 +1232,10 @@
         state.port = body.port
         document.documentElement.style.setProperty('--wb-port', String(body.port))
         const brand = document.querySelector('#wb-topbar .wb-brand small')
-        if (brand) brand.textContent = String(body.port)
+        if (brand) brand.textContent = brandSuffix()
       }
+      // 版本与端口都拿到了 → 补上右下角水印的文字（内容必须是字面量，见 applyWatermark）
+      applyWatermark()
     } catch { /* 读不到就用基础白名单 / 默认端口 */ }
   }
 
@@ -1318,6 +1372,7 @@
   //  每 2.5s 兜底轮询：sweep + refreshTopbar + watchSettings
   const boot = () => {
     attachStyle()
+    applyWatermark()   // 先画一次（版本可能还没到，先用端口）；loadUiConfig 回来后会重画带版本号
     // 标题双保险：注入层已经改写了 <title>，这里再设一次（SPA 可能自己改标题）
     try {
       document.title = 'DSH 工作台'
