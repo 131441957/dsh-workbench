@@ -713,6 +713,270 @@ def cmd_plugin_info(name: str) -> int:
     return 0
 
 
+def ledger_path() -> Path:
+    return STATE_DIR / "installed.json"
+
+
+def ledger_load() -> dict:
+    try:
+        data = json.loads(ledger_path().read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def ledger_save(data: dict) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    ledger_path().write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+
+
+def profile_dir() -> Path:
+    return WB_HOME / "profiles" / WB_PROFILE
+
+
+def pkg_dir_of(name: str) -> Path:
+    return profile_dir() / "node_modules" / name
+
+
+def normalize_pkg_name(spec: str) -> str:
+    """目录 → 取它的 package.json name；包名 → 原样。"""
+    p = Path(spec)
+    if p.exists() and (p / "package.json").exists():
+        try:
+            return str(json.loads((p / "package.json").read_text(encoding="utf-8")).get("name") or spec).strip()
+        except Exception:
+            return spec
+    return spec.strip()
+
+
+def pre_install_snapshot() -> Path:
+    """装前快照：只留三件套（几十 KB），回滚够用。"""
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    dest = BACKUP_ROOT / f"pre-install-{stamp}"
+    dest.mkdir(parents=True, exist_ok=True)
+    for src, name in (
+        (profile_dir() / "package.json", "package.json"),
+        (profile_dir() / "pnpm-lock.yaml", "pnpm-lock.yaml"),
+        (STATE_DIR / "ui-config.json", "ui-config.json"),
+        (ledger_path(), "installed.json"),
+    ):
+        if src.exists():
+            shutil.copy2(src, dest / name)
+    return dest
+
+
+def restore_install_snapshot(dest: Path) -> None:
+    for name, target in (
+        ("package.json", profile_dir() / "package.json"),
+        ("pnpm-lock.yaml", profile_dir() / "pnpm-lock.yaml"),
+        ("ui-config.json", STATE_DIR / "ui-config.json"),
+        ("installed.json", ledger_path()),
+    ):
+        src = dest / name
+        if src.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, target)
+        elif target.exists():
+            target.unlink()
+
+
+def register_nav_titles(pkg: str, titles: list[str]) -> list[str]:
+    """把插件的设置分区标题登记进白名单，并记住"哪个插件写的"，卸载时才好清。"""
+    cfg = ui_config_load()
+    keep = [t for t in (cfg.get("keepNav") or []) if isinstance(t, str)]
+    nav_by = cfg.get("navByPlugin") if isinstance(cfg.get("navByPlugin"), dict) else {}
+    added = []
+    for t in titles:
+        if t not in keep:
+            keep.append(t)
+            added.append(t)
+    nav_by[pkg] = sorted(set((nav_by.get(pkg) or []) + titles))
+    cfg["keepNav"] = keep
+    cfg["navByPlugin"] = nav_by
+    ui_config_save(cfg)
+    return added
+
+
+def unregister_nav_titles(pkg: str) -> list[str]:
+    cfg = ui_config_load()
+    nav_by = cfg.get("navByPlugin") if isinstance(cfg.get("navByPlugin"), dict) else {}
+    owned = [t for t in (nav_by.pop(pkg, []) or []) if isinstance(t, str)]
+    keep = [t for t in (cfg.get("keepNav") or []) if isinstance(t, str) and t not in owned]
+    cfg["keepNav"] = keep
+    cfg["navByPlugin"] = nav_by
+    ui_config_save(cfg)
+    return owned
+
+
+def safe_restart() -> bool:
+    """维护模式重启：**先 suspend 停掉自动伴随**（否则 supervisor 看到端口空出来会抢先
+    起一个实例，和我们这次的启动抢端口 → EADDRINUSE 假故障），起完再 resume。"""
+    cmd_suspend()
+    waited = 0.0
+    while port_listening(WB_PORT) and waited < 20:
+        time.sleep(0.5)
+        waited += 0.5
+    if port_listening(WB_PORT):
+        bad(f"端口 {WB_PORT} 20 秒内没释放，放弃自动启动")
+        cmd_resume()
+        return False
+    cmd_start(True)
+    up = False
+    for _ in range(40):
+        if port_listening(WB_PORT):
+            up = True
+            break
+        time.sleep(0.5)
+    cmd_resume()
+    return up
+
+
+def cmd_uninstall_plugin(name: str, no_restart: bool = False) -> int:
+    """卸载一个插件并把痕迹清干净：profile / node_modules / 设置白名单 / 安装台账。"""
+    if not name:
+        bad("用法：wb.py uninstall-plugin <包名> [--no-restart]")
+        return 2
+    target = normalize_pkg_name(name)
+    head(f"卸载插件：{target}")
+
+    prof_meta_path = profile_dir() / "package.json"
+    try:
+        prof_meta = json.loads(prof_meta_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        bad(f"读不到 profile 清单：{exc}")
+        return 1
+    known = target in (prof_meta.get("dependencies") or {}) or target in (
+        ((prof_meta.get("dsh") or {}).get("profile") or {}).get("bundles") or [])
+    if not known:
+        warn(f"profile 里没有 {target}（继续清理残留）")
+
+    if known and cmd_plugins("remove", target, "") != 0:
+        bad("卸载失败")
+        return 1
+
+    # ① node_modules 残留（含 scope 目录）
+    pkg_dir = pkg_dir_of(target)
+    if pkg_dir.exists():
+        try:
+            shutil.rmtree(pkg_dir)
+            ok(f"已删除 node_modules 残留：{pkg_dir}")
+        except Exception as exc:  # noqa: BLE001
+            warn(f"删 node_modules 失败：{exc}")
+        scope_dir = pkg_dir.parent
+        if target.startswith("@") and scope_dir.exists() and not any(scope_dir.iterdir()):
+            try:
+                scope_dir.rmdir()
+                ok(f"已删除空的 scope 目录：{scope_dir}")
+            except Exception:
+                # rmdir 在 Windows 上偶尔会因句柄未释放失败，退一步用递归删除
+                try:
+                    shutil.rmtree(scope_dir)
+                    ok(f"已删除空的 scope 目录：{scope_dir}")
+                except Exception as exc:  # noqa: BLE001
+                    warn(f"scope 目录残留（手动删也行）：{scope_dir}（{exc}）")
+
+    # ② 设置白名单里它写过的标题
+    owned = unregister_nav_titles(target)
+    if owned:
+        ok(f"白名单已清理：{owned}")
+    else:
+        info("白名单里没有它登记的标题")
+
+    # ③ 台账
+    led = ledger_load()
+    if led.pop(target, None) is not None:
+        ledger_save(led)
+        ok("安装台账已移除该条")
+
+    if no_restart:
+        warn("已跳过重启；界面上的入口会在下次重启页面后消失")
+        return 0
+    if not safe_restart():
+        return 1
+    try:
+        data = http_json(f"http://127.0.0.1:{WB_PORT}/wb-api/plugins")
+        still = next((p for p in data.get("plugins", []) if p.get("name") == target), None)
+        (bad if still else ok)(f"插件清单里{'仍有' if still else '已没有'} {target}")
+    except Exception as exc:  # noqa: BLE001
+        warn(f"读插件清单失败：{exc}")
+    return 0
+
+
+def cmd_fix_ui() -> int:
+    """重新对齐界面：把已装插件的设置分区补进白名单，并检查客户端是否真被页面加载。
+
+    用于"从别处装的插件"（比如插件市场里点安装）——它们绕过 install-plugin，
+    白名单没登记就会出现"装了但看不见"。
+    """
+    head("重新对齐界面")
+    try:
+        prof_meta = json.loads((profile_dir() / "package.json").read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        bad(f"读不到 profile 清单：{exc}")
+        return 1
+    deps = prof_meta.get("dependencies") or {}
+    builtins = {"@deepseek-ai/dsh-base", "@deepseek-ai/dsh-web-app"}
+
+    page_html = ""
+    try:
+        url = current_url()
+        if url:
+            page_html = http_get_text(url)
+    except Exception as exc:  # noqa: BLE001
+        warn(f"抓首页失败（模块表/加载状态这项会跳过）：{exc}")
+
+    added_total = []
+    rows = []
+    for name in sorted(deps):
+        if name in builtins:
+            continue
+        pkg_dir = pkg_dir_of(name)
+        if not pkg_dir.exists():
+            rows.append((name, "目录缺失", "-", "✗"))
+            continue
+        entries = detect_ui_entries(pkg_dir)
+        titles = entries.get("titles") or []
+        if titles:
+            added_total.extend(register_nav_titles(name, titles))
+        loaded = "-"
+        if entries.get("client") and page_html:
+            loaded = "✓" if f"{name}/client.js" in page_html else "✗"
+        rows.append((name, "有 " + str(entries.get("clientPath") or ""), ",".join(titles) or "-", loaded))
+        led = ledger_load()
+        item = led.get(name) or {}
+        item.update({
+            "name": name,
+            "version": item.get("version") or _pkg_version(pkg_dir),
+            "source": item.get("source") if item.get("source") not in (None, "", "unknown") else (deps.get(name) or "unknown"),
+            "client": entries.get("clientPath") or "",
+            "slots": entries.get("slots") or [],
+            "navTitles": titles,
+            "lastFixAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        })
+        led[name] = item
+        ledger_save(led)
+
+    for name, client, titles, loaded in rows:
+        head_line = f"{name}  客户端:{client}  设置分区:{titles}  页面已加载:{loaded}"
+        (ok if loaded in ("✓", "-") else warn)(head_line)
+    if added_total:
+        ok(f"白名单新增：{added_total}（刷新页面即可生效，不用重启）")
+    else:
+        info("白名单没有新增（都已登记）")
+    if page_html:
+        miss = [r[0] for r in rows if r[3] == "✗"]
+        if miss:
+            warn(f"这些插件的客户端没被页面加载：{', '.join(miss)}（看 home\\logs\\startup-*.log）")
+    return 0
+
+
+def _pkg_version(pkg_dir: Path) -> str:
+    try:
+        return str(json.loads((pkg_dir / "package.json").read_text(encoding="utf-8")).get("version") or "?")
+    except Exception:
+        return "?"
+
+
 def cmd_install_plugin(spec: str, keep_nav: str = "", no_restart: bool = False) -> int:
     """可视化插件统一安装：装 → 认出界面入口 → 登记白名单 → 安全重启 → 验证。
 
@@ -722,39 +986,50 @@ def cmd_install_plugin(spec: str, keep_nav: str = "", no_restart: bool = False) 
         bad("用法：wb.py install-plugin <npm 包名 或 插件目录> [--keep-nav 标题1,标题2] [--no-restart]")
         return 2
     head("可视化插件统一安装")
+    target = normalize_pkg_name(spec)
 
-    # ① 装进 bench profile（内部会跑 pnpm；失败就直接停）
+    # ⓪ 装前快照（profile 三件套 + 台账），验证不过就靠它回滚
+    snapshot = pre_install_snapshot()
+    info(f"装前快照：{snapshot}")
+
+    # ① 装进 bench profile（内部会跑 pnpm；失败就回滚）
     if cmd_plugins("add", spec, "") != 0:
-        bad("安装失败，已中止")
+        bad("安装失败，正在回滚")
+        restore_install_snapshot(snapshot)
+        cmd_plugins("install", "", "")
         return 1
 
     # ② 定位装好的包
-    if (Path(spec) / "package.json").exists():
-        try:
-            target = json.loads((Path(spec) / "package.json").read_text(encoding="utf-8")).get("name", spec)
-        except Exception:
-            target = spec
-    else:
-        target = spec
-    target = str(target).strip()
-    pkg_dir = WB_HOME / "profiles" / WB_PROFILE / "node_modules" / target
+    pkg_dir = pkg_dir_of(target)
     entries = detect_ui_entries(pkg_dir) if pkg_dir.exists() else {"titles": [], "sidebar": False, "client": False, "slots": []}
     ok(f"包：{target}（{'目录' if pkg_dir.exists() else '未找到目录'}，client={'有 ' + str(entries.get('clientPath') or '') if entries.get('client') else '无'}）")
     if entries.get("slots"):
         info(f"注册槽位：{', '.join(entries['slots'][:8])}")
 
-    # ③ 设置分区标题写进 UI 白名单（这就是以前每次要手改 KEEP_NAV 的那一步）
+    # ③ 设置分区标题写进 UI 白名单（并记住是哪个插件写的，卸载时好清）
     titles = [t.strip() for t in keep_nav.split(",") if t.strip()] or entries.get("titles") or []
     if titles:
+        added = register_nav_titles(target, titles)
         cfg = ui_config_load()
-        keep = [t for t in (cfg.get("keepNav") or []) if isinstance(t, str)]
-        added = [t for t in titles if t not in keep]
-        keep.extend(added)
-        cfg["keepNav"] = keep
-        ui_config_save(cfg)
-        ok(f"设置导航白名单：新增 {added or '无（已在白名单）'}；当前 {keep}")
+        ok(f"设置导航白名单：新增 {added or '无（已在白名单）'}；当前 {cfg.get('keepNav')}")
     else:
         warn("没认出设置分区标题；如果它确实在设置里加了分区，用 --keep-nav 指定")
+
+    # 安装台账：谁、什么版本、来源、声明能力、注册槽位
+    led = ledger_load()
+    ledger_item = led.get(target) or {}
+    ledger_item.update({
+        "name": target,
+        "version": _pkg_version(pkg_dir),
+        "source": spec,
+        "client": entries.get("clientPath") or "",
+        "slots": entries.get("slots") or [],
+        "navTitles": titles,
+        "installedAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    })
+    led[target] = ledger_item
+    ledger_save(led)
+    info(f"台账：state\\installed.json 记下 {target} v{ledger_item.get('version')}")
 
     if no_restart:
         warn("已跳过重启；改动要 wb.py restart 后才生效")
@@ -763,39 +1038,33 @@ def cmd_install_plugin(spec: str, keep_nav: str = "", no_restart: bool = False) 
     # ④ 安全重启：先停、等端口真的释放、再启动（避免 EADDRINUSE 造成假故障）
     err_log = LOG_DIR / "workbench.err.log"
     err_offset = err_log.stat().st_size if err_log.exists() else 0
-    cmd_stop()
-    waited = 0.0
-    while port_listening(WB_PORT) and waited < 20:
-        time.sleep(0.5)
-        waited += 0.5
-    if port_listening(WB_PORT):
-        bad(f"端口 {WB_PORT} 20 秒内没释放，放弃自动启动；稍后手动 wb.py restart")
-        return 1
-    cmd_start(True)
+    started = safe_restart()
 
-    # ⑤ 验证
+    # ⑤ 验证（任何一条硬指标不过 → 回滚，别把坏状态留给用户）
     head("验证")
-    up = False
-    for _ in range(40):
-        if port_listening(WB_PORT):
-            up = True
-            break
-        time.sleep(0.5)
+    up = started and port_listening(WB_PORT)
     (ok if up else bad)(f"端口 {WB_PORT} {'在听' if up else '没起来'}")
-    if not up:
-        return 1
+    healthy = False
+    if up:
+        try:
+            data = http_json(f"http://127.0.0.1:{WB_PORT}/wb-api/plugins")
+            row = next((p for p in data.get("plugins", []) if p.get("name") == target), None)
+            if row:
+                healthy = bool(row.get("inBundles") and row.get("linked"))
+                (ok if healthy else bad)(
+                    f"{target}: bundle={'✓' if row.get('inBundles') else '✗'} linked={'✓' if row.get('linked') else '✗'} v={row.get('version')}")
+            else:
+                bad(f"插件清单里没有 {target}")
+        except Exception as exc:  # noqa: BLE001
+            warn(f"读插件清单失败：{exc}")
 
-    try:
-        data = http_json(f"http://127.0.0.1:{WB_PORT}/wb-api/plugins")
-        row = next((p for p in data.get("plugins", []) if p.get("name") == target), None)
-        if row:
-            healthy = bool(row.get("inBundles") and row.get("linked"))
-            (ok if healthy else bad)(
-                f"{target}: bundle={'✓' if row.get('inBundles') else '✗'} linked={'✓' if row.get('linked') else '✗'} v={row.get('version')}")
-        else:
-            bad(f"插件清单里没有 {target}")
-    except Exception as exc:  # noqa: BLE001
-        warn(f"读插件清单失败：{exc}")
+    if not (up and healthy):
+        bad("验证没过，回滚到装前状态")
+        restore_install_snapshot(snapshot)
+        cmd_plugins("install", "", "")
+        safe_restart()
+        warn(f"已回滚；插件 {target} 未生效（快照：{snapshot}）")
+        return 1
 
     try:
         url = current_url()
@@ -2161,6 +2430,9 @@ def main(argv: list[str]) -> int:
             (args.rest[0] if args.rest else (args.sub or args.spec or "")), args.keep_nav, args.no_restart),
         "plugin-info": lambda: cmd_plugin_info(
             (args.rest[0] if args.rest else (args.sub or args.spec or ""))),
+        "uninstall-plugin": lambda: cmd_uninstall_plugin(
+            (args.rest[0] if args.rest else (args.sub or args.spec or "")), args.no_restart),
+        "fix-ui": lambda: cmd_fix_ui(),
         "url": lambda: cmd_url(),
         "open": lambda: cmd_open(),
         "page": lambda: cmd_page(),

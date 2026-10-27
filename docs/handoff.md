@@ -50,7 +50,7 @@ python E:\DSH-WORKBENCH\tools\wb.py install-plugin <包名|目录> [--keep-nav �
 > git：本仓库**没有配全局身份**，直接 `git commit` 会报 `Author identity unknown`；用 `git -c user.name=meow -c user.email=meow@local commit -m "…"`，提交后 `git status --short` 必须为空。
 > 重启会换 token：`wb.py restart` 之后，已经开着的页面 cookie 失效（主区全白）。**必须**把页面导航到 `wb.py url` 打出的新地址（`Ctrl+L` 输入后可能要按两次 Enter，第一次会被地址栏下拉建议吃掉）。
 > 动浏览器之前**每次都要重新确认标签**：标题里的「和另外 N 个页面」就是标签数，活动标签不一定还是上次那个。2026-10-27 我沿用昨晚「只有一个标签」的结论直接导航，把用户正开着的 dsh-market 页面顶掉了（已用 `Alt+←` 恢复）。正确做法：先 `Get-Process msedge → MainWindowTitle` + 截图看清标签，再决定按键。
-> `wb.py restart` 有**抢端口风险**：新进程可能在旧进程释放前 bind，日志出现 `listen EADDRINUSE … 127.0.0.1:59430` → 该实例 webserver 挂掉 → `startup failed: N required plugins did not activate`（12 个 pending）。**看到 startup failed 先别怪插件**：确认 59430 只有一个 owner（`Get-NetTCPConnection -LocalPort 59430`）+ 看 `home\logs\startup-*.log`，必要时 `wb.py stop` 等两秒再 `start`。
+> `wb.py restart` 有**抢端口风险**：真凶是 **supervisor 看到端口空出来就抢先起一个实例**，和我们这次的启动抢端口 → 新实例 `listen EADDRINUSE … 127.0.0.1:59430` → webserver 挂 → `startup failed: N required plugins did not activate`（12 个 pending）。**维护型重启一律走 `safe_restart`（suspend → 等端口释放 → start → resume）**；手工遇到时先 `wb.py suspend`，起来后再 `wb.py resume`。看到 startup failed 先别怪插件：确认 59430 只有一个 owner + 看 `home\logs\startup-*.log`。
 
 ```powershell
 python E:\DSH-WORKBENCH\tools\wb.py status       # 端口/守护/版本

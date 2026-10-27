@@ -13,14 +13,14 @@
 
 | ID | 现象 | 证据 | 影响 | 修法 | 状态 |
 |---|---|---|---|---|---|
-| PM-01 | 两个安装入口会打架：市场里的「安装」按钮执行 `dsh plugin --profile <当前 profile>`，在工作台里跑就是装进 bench，**绕过白名单与验证** | `dshmarket/lib/dsh-cli.js` 里 `spawnShim(file,[...args,'plugin','--profile',profile,...])` | 装上了但界面看不见（2026-10-27 实测过的现象） | 既然市场不算依赖，改为提供 `wb.py fix-ui`：扫描**已装**插件、补 `keepNav`、验证客户端入口是否真被页面加载。谁装的都能补齐治理 | 待做 |
-| PM-02 | 装前不打快照、装崩不自动回滚 | `cmd_install_plugin` 只验证，无 backup/restore | 一次装崩要人工 `plugins remove` + 恢复，耗时且易错 | `install-plugin` 装前存三件套（profile `package.json` + `pnpm-lock.yaml` + `state\ui-config.json`），验证失败自动还原并移除包 | 待做 |
-| PM-03 | 没有安全模式 | `wb.py start` 只能全量启动 | 插件把 webServer 搞挂 = 界面打不开，只能命令行救 | `wb.py start --safe`：用一份临时补丁把非内置 bundle 全部 `disabled: true` 启动，界面能开即能在面板里禁用/卸载 | 待做 |
-| PM-04 | `keepNav` 只增不删 | `wb.py` 里只有 append（`cfg["keepNav"] = keep`） | 卸载后白名单残留，越积越乱 | `uninstall-plugin` 时同步清理该插件写入的标题 | 待做 |
-| PM-05 | 装的是 `latest`，不锁版本；无安装台账 | profile 里写 `"latest"`；无 `installed.json` | 复现/排障无法知道"当时装的是哪个版本" | profile 写确切版本；`state\installed.json` 记 包名/版本/来源(npm 或目录)/时间/声明能力/验证结果 | 待做 |
-| PM-06 | 没有装前兼容预判 | 只能运行期撞；`dshmarket` 声明 peer 最低 `0.2.1-alpha.3` 却在 `0.2.1-alpha.1` 上能跑 | 预判过严会误杀，过宽会撞崩 | `plugin-info` 里做 semver 比对，输出三档：满足 / 不满足但**实测可跑** / 不满足且风险高；并把结论写进台账 | 部分（有侦察，无结论分级） |
-| PM-07 | 无搜索、无更新检查 | 只能按确切包名装 | 市场里 7211 个插件只能靠外部翻 | `plugin-search <关键词>` 读 `https://awesome-dsh-plugin.com/plugins.json`；`plugin-update` 对比已装版本 | 待做 |
-| PM-08 | 卸载不清 `node_modules` | pnpm 不剪（`dsh-wb-web` 那次是手动 `rmdir`） | 残留死链，`linked` 状态会骗人 | 卸载后按包名删 `home\profiles\bench\node_modules\<pkg>`（含 scope 目录清理） | 待做 |
+| PM-01 | 两个安装入口会打架：市场里的「安装」按钮执行 `dsh plugin --profile <当前 profile>`，在工作台里跑就是装进 bench，**绕过白名单与验证** | `dshmarket/lib/dsh-cli.js` 里 `spawnShim(file,[...args,'plugin','--profile',profile,...])` | 装上了但界面看不见（2026-10-27 实测过的现象） | `wb.py fix-ui`：扫描**已装**插件、补 `keepNav`、验证客户端入口是否真被页面加载。谁装的都能补齐治理 | **已完成（2026-10-27）**：`fix-ui` 实测认出 4 个插件 + dshmarket 的「插件市场」+ 页面加载状态 |
+| PM-02 | 装前不打快照、装崩不自动回滚 | `cmd_install_plugin` 只验证，无 backup/restore | 一次装崩要人工 `plugins remove` + 恢复，耗时且易错 | 装前存三件套（profile `package.json` + `pnpm-lock.yaml` + `ui-config.json` + 台账），验证不过自动还原并重装 | **已完成（2026-10-27）**：`backups\pre-install-<时间>\`；端口没起/插件未登记链接 → 自动回滚 |
+| PM-03 | 没有安全模式 | `wb.py start` 只能全量启动 | 插件把 webServer 搞挂 = 界面打不开，只能命令行救 | `wb.py start --safe`：临时补丁把非内置 bundle 全部 `disabled: true` 启动 | 待做 |
+| PM-04 | `keepNav` 只增不删 | 原来只有 append | 卸载后白名单残留 | `ui-config.json` 里记 `navByPlugin`（哪个插件写的），`uninstall-plugin` 按插件清 | **已完成（2026-10-27）**：卸载实测清掉「测试分区」 |
+| PM-05 | 装的是 `latest`，不锁版本；无安装台账 | profile 里写 `"latest"` | 复现/排障无法知道"当时装的是哪个版本" | `state\installed.json` 记 包名/版本/来源/时间/客户端入口/槽位 | 部分（台账已有并含实际版本；profile 仍写 `latest`，未锁死） |
+| PM-06 | 没有装前兼容预判 | 只能运行期撞；`dshmarket` 声明 peer 最低 `0.2.1-alpha.3` 却在 `0.2.1-alpha.1` 上能跑 | 预判过严会误杀，过宽会撞崩 | `plugin-info` 里做 semver 比对，输出三档结论 | 部分（有侦察，无结论分级） |
+| PM-07 | 无搜索、无更新检查 | 只能按确切包名装 | 市场里 7211 个插件只能靠外部翻 | `plugin-search <关键词>` 读 `awesome-dsh-plugin.com/plugins.json`；`plugin-update` 对比已装版本 | 待做 |
+| PM-08 | 卸载不清 `node_modules` | pnpm 不剪（`dsh-wb-web` 那次是手动 `rmdir`） | 残留死链，`linked` 状态会骗人 | 卸载后删包目录 + 空的 scope 目录 | **已完成（2026-10-27）**：实测连 `@240xu` 空 scope 一起清 |
 | PM-09 | 插件面板信息太薄 | 只有 名称 / 版本 / 是否登记 / 是否链接 + 备注 | 看不出「来源、声明能力、上次验证时间、本次是否加载」 | 面板加列：来源、能力标签（如 `credentials`/`fs-write`，来自市场 json）、上次验证、加载状态 | 待做 |
 
 ## 2. 分发/移植缺口（客户独立安装到别的 harness）
@@ -40,11 +40,13 @@
 
 ## 4. 建议顺序
 
-1. `fix-ui`（PM-01）+ `uninstall-plugin`（PM-04/PM-08）——把"装/卸之后没人管"补上
-2. 装前快照 + 失败回滚（PM-02）
-3. `attach/detach`（DIST-01）——这是"能给别人装"的第一道门
+1. ~~`fix-ui`（PM-01）+ `uninstall-plugin`（PM-04/PM-08）~~ **已完成 2026-10-27**
+2. ~~装前快照 + 失败回滚（PM-02）~~ **已完成 2026-10-27**（台账 PM-05 部分完成）
+3. `attach`/`detach`（DIST-01）——这是"能给别人装"的第一道门
 4. 端口/路径可移植（DIST-02/03）+ 客户文档（DIST-04）
-5. 其余（PM-03/05/06/07/09、DIST-05）
+5. 其余（PM-03/05 锁版本/06/07/09、DIST-05）
+
+> 备注（2026-10-27）：做 1、2 时发现「重启抢端口」的真凶不是 `restart` 本身，而是**supervisor 看到端口空出来就抢先起实例**。所以维护型重启必须走「suspend → 等端口释放 → start → resume」（`wb.py` 里的 `safe_restart`），否则日志里永远有 EADDRINUSE 假故障。
 
 ## 5. 验收标准（怎么算做完）
 
