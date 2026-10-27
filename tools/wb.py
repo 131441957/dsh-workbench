@@ -45,6 +45,7 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import ctypes
 import hashlib
 import json
@@ -2810,10 +2811,48 @@ Write-Output "shortcuts-ok"
 #      不就绪就自动 restart-safe 一次（实测"服务先起、插件后解析"会让三个插件全被跳过），
 #      仍失败才报错并指向 startup-*.log。
 # 坑：① 不要把启动放在 pnpm 之前；② 别指望"端口在听"就算成功——要验注入层。
+# ── 安装锁：防止"同时点两次安装" ──────────────────────────────────────────────
+# 场景：客户双击两次 install.cmd（或两个窗口同时跑 setup）。首次安装会复制 1.6GB + 跑 pnpm +
+# 抢端口，两个进程同时来就可能把 profile 装坏、起两个守护。
+# 锁文件写 state\setup.lock（pid + 时间）；进程退出时自动删；pid 已死视为残留锁，自动清掉。
+SETUP_LOCK = STATE_DIR / "setup.lock"
+
+
+def _acquire_setup_lock() -> bool:
+    try:
+        if SETUP_LOCK.exists():
+            parts = SETUP_LOCK.read_text(encoding="utf-8", errors="replace").split()
+            pid = int(parts[0]) if parts and parts[0].isdigit() else 0
+            at = parts[1] if len(parts) > 1 else "?"
+            if pid and pid != os.getpid() and pid_alive(pid):
+                bad(f"另一个安装正在进行（pid={pid}，开始于 {at}）——等它跑完再点，别同时点两次")
+                return False
+            warn("清理上次残留的安装锁（进程已退出）")
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        SETUP_LOCK.write_text(f"{os.getpid()} {time.strftime('%H:%M:%S')}", encoding="utf-8")
+        return True
+    except Exception:
+        return True   # 拿不到锁也别挡住安装本身
+
+
+def _release_setup_lock() -> None:
+    try:
+        if SETUP_LOCK.exists():
+            first = SETUP_LOCK.read_text(encoding="utf-8", errors="replace").split()
+            if first and first[0].isdigit() and int(first[0]) == os.getpid():
+                SETUP_LOCK.unlink()
+    except Exception:
+        pass
+
+
 def cmd_install(force: bool = False) -> int:
     """自主安装 / 修复 / 升级：幂等，可以反复跑。"""
     head("工作台安装器")
     ok(f"根目录 {WB_ROOT}")
+    if not _acquire_setup_lock():
+        return 1
+    atexit.register(_release_setup_lock)
+
 
     for name in ("app", "home", "plugins", "ui", "state", "logs", "seeds", "docs", "backups", "tools"):
         (WB_ROOT / name).mkdir(parents=True, exist_ok=True)
