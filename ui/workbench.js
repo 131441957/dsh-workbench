@@ -1650,6 +1650,20 @@
           }, 800)
           return
         }
+        if (mode === 'injecttest') {
+          // 机制实验：先 inject 一个没人声明的槽位 → 600ms 后 renderSlot 声明它 → 再等 800ms 看注册有没有发生
+          const t = window.__wbInjectTest ? window.__wbInjectTest('wb.experiment.slot') : null
+          state.selftestInfo = { started: Boolean(t) }
+          if (!t) return
+          setTimeout(() => {
+            state.selftestInfo.render = t.render ? t.render() : 'no-render'
+            setTimeout(() => {
+              const info = t.inspect ? t.inspect() : null
+              state.selftestInfo.result = info
+            }, 800)
+          }, 600)
+          return
+        }
         if (mode === 'layout') {
           // 排障：把 frame 每个直接子元素的类名/尺寸/computed 关键属性打出来。
           // （2026-10-27 用来查"左栏停到屏幕外之后中列被 _bottomRow 挤成 379px"）
