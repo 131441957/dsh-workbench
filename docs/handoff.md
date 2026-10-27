@@ -21,7 +21,7 @@
 - **生命周期**：watchdog 盯主驾进程（主驾关→8 秒内关工作台）；supervisor 随登录自启（主驾开→拉起工作台）。
 - **接入层**（装在主 profile，软依赖）：`plugins\dsh-workbench-bridge`，路由 `/wb-bridge/{status,plugins,sessions,session/page,session/prompt,events}`，token 在 `state\bridge-token.txt`（请求头 `x-wb-token`）；工具 `workbench_status / workbench_api / workbench_plugins / workbench_web_search`。
 - **SSE 实时流**：桥 `/wb-bridge/events` 每 3 秒推 `{workbench:{reachable,latencyMs},sessions:{count,running,latest}}`；工作台代理 `/wb-sessions/events` 转发；面板用 EventSource 自动刷新。
-- **工作台插件**：`dsh-wb-api-browser`（状态面板 key `wb-api`：宿主服务/前端槽位/profile 分层/主驾状态 **+ 独立「工作台插件」面板 key `wb-plugins`**，用 `h(Panel,{fixedTab:'plugins',hideTabs:true})` 复用同一份 Panel）、`dsh-wb-sessions`（Harness 会话：列表/历史/发送 + 标题）、`dsh-wb-ui`（webui 注入层）、`dsh-wb-web`（能力出口，重复能力，已标注）、`dsh-workbench-bridge`（主驾侧）。
+- **工作台插件**：`dsh-wb-api-browser`（状态面板 key `wb-api`：宿主服务/前端槽位/profile 分层/主驾状态 **+ 独立「工作台插件」面板 key `wb-plugins`**，用 `h(Panel,{fixedTab:'plugins',hideTabs:true})` 复用同一份 Panel）、`dsh-wb-sessions`（Harness 会话：列表/历史/发送 + 标题 + 工作区分组）、`dsh-wb-ui`（webui 注入层）、`dsh-workbench-bridge`（主驾侧接入层）。**`dsh-wb-web` 已于 2026-10-27 整体卸载**（它只是当初用来测工作台的样板能力出口，`/wb-web/search` 与主驾 `web_search` 重复）：profile 里的依赖/bundle 已删、node_modules 链接已剪、插件目录已从仓库移除（`/wb-web/*` 现在 404），源码仍在 git 历史与旧快照里，要恢复就 `git checkout` 旧版本 + `wb.py plugins add`。
 - **UI 现状**：左栏已改**顶栏**（纯 CSS：`.OSewFq_frame` 强制 flex、隐藏 sidebar/rightbar/handle、centerCol 撑满；`body{padding-top:46px}`）。顶栏分组：左「Harness会话 / 插件」，右「状态 / 设置」。面板根节点带 `data-wb-panel`，`ui\workbench.js` 的 `maskUnknownMain()` 在面板就位前遮罩主区，避免「探索未至之境」闪一下（6 秒超时保护）。
 - **会话面板**：290px 左栏；首部三行（标题/实时状态/过滤+排序）；**按工作区分组**（默认排序=按工作区）：分组键是 `cwd`，组头显示工作区名——名字来自宿主新增接口 `/wb-sessions/workspaces`（只读主驾 `storages\workspace.json`，`default-workspace` 按原版规则显示成「默认工作区」），取不到才退回目录末段；可折叠、组头加粗+胶囊计数+分隔线；行缩进 20px、运行中圆点发光；**行标题来自桥透出的 `summary.projections.values.title`**（`/wb-sessions/list` 已带 `title`）。⚠️ 曾经分组键误用 `sessionLabel()`（优先标题），导致每条会话自成一组、组头全是标题——已修，回归测试 `tools\test-sessions-group.mjs`。
 - **设置页**：只留 语言 / 外观 / 字号大小；其余按标题文字隐藏（`pruneSettings()`，正则 `[\w-]+_(row|group|setting)`，别按 `[data-slot]` 判断——它包住整个区域）。
@@ -30,6 +30,7 @@
 ## 常用验证手段（别靠猜）
 > git：本仓库**没有配全局身份**，直接 `git commit` 会报 `Author identity unknown`；用 `git -c user.name=meow -c user.email=meow@local commit -m "…"`，提交后 `git status --short` 必须为空。
 > 重启会换 token：`wb.py restart` 之后，已经开着的页面 cookie 失效（主区全白）。**必须**把页面导航到 `wb.py url` 打出的新地址（`Ctrl+L` 输入后可能要按两次 Enter，第一次会被地址栏下拉建议吃掉）。
+> 动浏览器之前**每次都要重新确认标签**：标题里的「和另外 N 个页面」就是标签数，活动标签不一定还是上次那个。2026-10-27 我沿用昨晚「只有一个标签」的结论直接导航，把用户正开着的 dsh-market 页面顶掉了（已用 `Alt+←` 恢复）。正确做法：先 `Get-Process msedge → MainWindowTitle` + 截图看清标签，再决定按键。
 
 ```powershell
 python E:\DSH-WORKBENCH\tools\wb.py status       # 端口/守护/版本
@@ -42,6 +43,8 @@ curl  http://127.0.0.1:59430/wb-sessions/workspaces  # 工作区注册表（分�
 # 页面自报结构：POST /wb-ui/dom → state\dom-snapshot.json；控制台 __WB_UI__ / __wbSweep()
 # 开机自诊断：每次加载页面 4.6 秒后自动写 state\boot-diag.json（按钮表 / hasPanel / clickLog / JS 报错 / console.error）
 node E:\DSH-WORKBENCH\tools\test-sessions-group.mjs   # 分组回归（工作区 vs 标题）
+python E:\DSH-WORKBENCH\tools\wb.py plugins list        # 工作台插件（bundle/linked/spec）
+python E:\DSH-WORKBENCH\tools\wb.py plugins remove <名> # 卸载：删依赖+bundle → pnpm install
 ```
 
 ## 待办
@@ -49,7 +52,8 @@ node E:\DSH-WORKBENCH\tools\test-sessions-group.mjs   # 分组回归（工作区
 2. **GitHub 远程仓**：用户明确「暂不上传」。
 3. **能力注册表的“按名调用”通路**：等第一个**自研插件**出现再做（原则：只登记主驾没有的能力，`package.json` 的 `dsh.workbench.capabilities` 声明）。
 4. **已关闭（2026-10-26 用户拍板）**：主 profile 现有插件（除 `meow-memory` 外还有 `dsh-meow-panel` / `persona-preset` / 4 个第三方功能包）**一律不动、不隔离、不搬**。用户原话「不用，现在的插件都不用动，因为我暂时不会去修改它」。别再拿 A/B 方案来问。
-5. 可选：细粒度会话事件推送（现在只有 tick 汇总）；`/wb-web` 与主驾 `web_search` 重复，可考虑下线。
+5. **已完成（2026-10-27）**：`/wb-web` 已随 `dsh-wb-web` 插件卸载（用户原话「那就给他撤掉，而且这个插件是用来测试工作台的，完全卸载掉也可以」）。顺带给 `wb.py plugins` 补上了 `remove` 动作（原来文档写了但没有实现）。剩可选项：细粒度会话事件推送（现在只有 tick 汇总）。
+6. **待用户点头（涉及主 profile）**：主驾桥里还有个 `workbench_web_search` 工具，函数 `wbSearch()` 指向已删除的 `/wb-web/search`，现在调用只会返回 `{ok:false,error:…}`。要彻底干净得改 `plugins\dsh-workbench-bridge\index.js` 删掉该工具——这是**主 profile 侧**，需用户明确同意后才能动。
 
 ## 用户偏好
 中文、简短、要证据不要"应该可以"；改完要**运行时验证**；重要节点主动 `wb.py backup`（旧快照一律不删，备注写清楚）；不确定就报告，别闷头猜；别让他手动点窗口，能用脚本/接口就自己来。

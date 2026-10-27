@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """wb.py — DSH 工作台（Workbench）工具链 v0.2
 
 只用标准库。工具用 Python，DSH 插件仍必须用 JS（Cordis 加载器只认 JS）。
@@ -526,7 +526,29 @@ def cmd_plugins(action: str = "list", spec: str = "", bundle: str = "") -> int:
         ok(f"已写入 profile：{name} → {deps[name]}")
         return cmd_plugins("install")
 
-    bad(f"未知动作：{action}（list/install/add）")
+    if action == "remove":
+        target = spec or bundle
+        if not target:
+            bad("用法：wb.py plugins remove <包名或插件目录>")
+            return 2
+        name = target
+        src = Path(target)
+        if src.exists() and (src / "package.json").exists():
+            try:
+                name = json.loads((src / "package.json").read_text(encoding="utf-8")).get("name", src.name)
+            except Exception:
+                name = src.name
+        if name not in deps and name not in bundles:
+            bad(f"profile 里没有这个插件：{name}")
+            return 1
+        deps.pop(name, None)
+        if name in bundles:
+            bundles.remove(name)
+        pkg_path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        ok(f"已从 profile 移除：{name}")
+        return cmd_plugins("install")
+
+    bad(f"未知动作：{action}（list/install/add/remove）")
     return 2
 
 
@@ -920,9 +942,8 @@ def cmd_install(force: bool = False) -> int:
 
 
 # 与主驾自带能力重复的工作台能力（登记表里要标出来，避免重复造轮子）
-DUPLICATE_WITH_MAIN = {
-    "/wb-web/search": "主驾自带 web_search / web_fetch",
-}
+# 目前为空：`/wb-web/search` 已于 2026-10-27 随 dsh-wb-web 插件一并卸载（它只是当初用来测工作台的样板）。
+DUPLICATE_WITH_MAIN = {}
 
 
 def cmd_caps() -> int:
