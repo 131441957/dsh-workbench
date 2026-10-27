@@ -1683,7 +1683,12 @@ def cmd_pack(out: str = "", include_test: bool = False, force: bool = False,
     dest.mkdir(parents=True, exist_ok=True)
 
     def ignore(_dir, names):
-        return [n for n in names if n in DIST_EXCLUDE_DIRS or n in DIST_EXCLUDE_FILES or n.endswith(".pyc")]
+        # 下划线开头的临时脚本（_patch_*.py / _diag_*.py 之类）一律不进分发版：
+        # 它们是调试期产物，而且经常带着本机绝对路径（2026-10-27 两次因此让
+        # absolutePathHits 变成 1，一次还差点提交进仓库）。
+        return [n for n in names
+                if n in DIST_EXCLUDE_DIRS or n in DIST_EXCLUDE_FILES or n.endswith(".pyc")
+                or n.startswith("_")]
 
     for name in ("tools", "ui", "docs", "seeds"):
         src = WB_ROOT / name
