@@ -6,31 +6,33 @@
 
 ## 三步装一个插件
 
+工作台根目录下执行（Windows PowerShell）：
+
 ```powershell
-# 1) 复制模板改名（目录名随意，包名必须是唯一的）
-Copy-Item E:\DSH-WORKBENCH\seeds\plugin-template E:\DSH-WORKBENCH\plugins\dsh-wb-demo -Recurse
+# 1) 复制模板改名（目录名随意，包名必须唯一）
+Copy-Item .\seeds\plugin-template .\plugins\dsh-wb-demo -Recurse
 
 # 2) 改三处名字：package.json 的 name、cordis.patch.yml 的 name、client.js 的 id / LABEL / KEY
 #    （宿主侧顺手改 PLUGIN_NAME / PREFIX）
 
-# 3) 装进 bench profile 并重启
-python E:\DSH-WORKBENCH\tools\wb.py plugins add E:\DSH-WORKBENCH\plugins\dsh-wb-demo
-python E:\DSH-WORKBENCH\tools\wb.py restart
+# 3) 装进 profile 并重启
+python .\tools\wb.py plugins add .\plugins\dsh-wb-demo
+python .\tools\wb.py restart
 ```
 
 卸载：
 
 ```powershell
-python E:\DSH-WORKBENCH\tools\wb.py plugins remove dsh-wb-demo
-python E:\DSH-WORKBENCH\tools\wb.py restart
+python .\tools\wb.py uninstall-plugin dsh-wb-demo
 ```
+
+> 想一步到位（自动登记设置白名单 + 安全重启 + 验证）用 `wb.py install-plugin .\plugins\dsh-wb-demo`。
 
 ## 顶栏排序规则（`ui\workbench.js`）
 
 - `LEFT_ORDER = ['Harness会话', '插件']`：左边的固定顺序
 - `RIGHT_ORDER = ['状态', '设置']`：右边，顺序即显示顺序
 - **不在上面两个列表里的入口，自动排到左边末尾** —— 所以新插件不用登记就能现身
-- 想让某个新面板固定位置，把它的显示名加进 `LEFT_ORDER` / `RIGHT_ORDER`（这一步是可选的美化，不是必需的）
 
 ## 注意
 

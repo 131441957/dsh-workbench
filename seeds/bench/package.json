@@ -2,14 +2,18 @@
   "name": "dsh-profile-bench",
   "private": true,
   "dependencies": {
-    "dsh-wb-api-browser": "link:E:/DSH-WORKBENCH/plugins/dsh-wb-api-browser"
+    "dsh-wb-api-browser": "link:${WB_ROOT}/plugins/dsh-wb-api-browser",
+    "dsh-wb-sessions": "link:${WB_ROOT}/plugins/dsh-wb-sessions",
+    "dsh-wb-ui": "link:${WB_ROOT}/plugins/dsh-wb-ui"
   },
   "dsh": {
     "profile": {
       "bundles": [
         "@deepseek-ai/dsh-base",
         "@deepseek-ai/dsh-web-app",
-        "dsh-wb-api-browser"
+        "dsh-wb-api-browser",
+        "dsh-wb-sessions",
+        "dsh-wb-ui"
       ]
     }
   }

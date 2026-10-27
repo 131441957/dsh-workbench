@@ -58,9 +58,9 @@
  * 以下为示例样式，可自行增删
  * ──────────────────────────────────────────────────────────────── */
 
-/* 右下角水印，用来确认注入生效 */
+/* 右下角水印，用来确认注入生效（端口由 workbench.js 从 /wb-ui/config 读出来写进 --wb-port） */
 body::after {
-  content: "工作台 59430";
+  content: "工作台 " var(--wb-port, "59430");
   position: fixed;
   right: 12px;
   bottom: 10px;

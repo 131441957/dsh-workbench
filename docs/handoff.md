@@ -46,6 +46,17 @@ python tools\wb.py detach --target-home <…> --apply                           
 - 装/卸都要**重启目标 harness** 才生效（桥是 host 代码）。
 - 演练办法（别拿真主 profile 试）：在 `state\` 下造一个假 home（`profiles\desktop\package.json` 带最小 bundles），用 `--target-home` 指过去走完整链路。
 
+## 分发给客户（2026-10-27）
+```powershell
+python tools\wb.py pack            # → dist\DSH-Workbench-<版本>\（含 README/MANIFEST）
+python tools\wb.py pack --force    # 覆盖
+```
+- 包内只有 `tools/ ui/ docs/(面向使用者的) seeds/ plugins/(4 个) config.template.json README.md MANIFEST.json`；**不含** `app/ home/ state/ logs/ backups/ attic/ ref/ dist/`。
+- **测试插件（dshmarket / 插件市场）永远不进包**——`MANIFEST.json` 里 `testOnlyPlugins` 明确写出来，`excludedPlugins` 记实际排除的。
+- `MANIFEST.json` 的 `absolutePathHits` 必须为 **0**：它扫包内所有文本里的本机绝对路径；不为 0 就别发货。当前 0。
+- 端口不再写死：`config.json` 的 `port` → 环境变量 `DSH_WORKBENCH_PORT` → 59430；启动时端口被别人占用会自动挑下一个并写回 config。界面从 `/wb-ui/config` 读端口，桥每 5 秒从 config 解析一次端口。
+- 种子里的 `${WB_ROOT}` / `${WB_HOME}` 在 `ensure_profile` 建 profile 时渲染，客户机上自动落到他的目录。
+
 ## 装一个带界面的插件（统一方法，2026-10-27 定）```powershell
 python E:\DSH-WORKBENCH\tools\wb.py plugin-info   <包名>   # 只侦察：client 入口 / 注册槽位 / 设置分区 / peer
 python E:\DSH-WORKBENCH\tools\wb.py install-plugin <包名|目录> [--keep-nav 标题] [--no-restart]

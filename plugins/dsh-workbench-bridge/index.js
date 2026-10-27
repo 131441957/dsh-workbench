@@ -13,7 +13,21 @@ export const inject = []
 const started = new WeakSet()
 
 const PREFIX = '/wb-bridge'
-const WB_PORT = Number(process.env.DSH_WORKBENCH_PORT || 59430)
+// 工作台端口：优先读工作台的 config.json（客户机上可能不是 59430），其次环境变量，最后默认值。
+// 每次都重新读（缓存 5 秒），这样工作台换端口后桥也能跟上，不必重启主程序。
+let portCache = { at: 0, port: 0 }
+function wbPort() {
+  const now = Date.now()
+  if (portCache.port && now - portCache.at < 5000) return portCache.port
+  let port = 0
+  try {
+    const cfg = JSON.parse(readFileSync(join(WB_ROOT, 'config.json'), 'utf8'))
+    if (Number.isInteger(cfg.port) && cfg.port > 0) port = cfg.port
+  } catch { /* 读不到往下走 */ }
+  if (!port) port = Number(process.env.DSH_WORKBENCH_PORT || 59430)
+  portCache = { at: now, port }
+  return port
+}
 const WB_ROOT = process.env.DSH_WORKBENCH_ROOT || 'E:\\DSH-WORKBENCH'
 
 function sendJson(res, status, body) {
@@ -35,7 +49,7 @@ async function readState(name) {
 async function probe() {
   const started = Date.now()
   try {
-    const res = await fetch(`http://127.0.0.1:${WB_PORT}/wb-api/health`, {
+    const res = await fetch(`http://127.0.0.1:${wbPort()}/wb-api/health`, {
       signal: AbortSignal.timeout(2000),
     })
     if (!res.ok) return { reachable: false, reason: `HTTP ${res.status}` }
@@ -194,7 +208,7 @@ let capCache = { at: 0, data: null }
 async function workbenchCapabilities(force = false) {
   if (!force && capCache.data && Date.now() - capCache.at < 20000) return capCache.data
   try {
-    const res = await fetch(`http://127.0.0.1:${WB_PORT}/wb-api/capabilities`, { signal: AbortSignal.timeout(5000) })
+    const res = await fetch(`http://127.0.0.1:${wbPort()}/wb-api/capabilities`, { signal: AbortSignal.timeout(5000) })
     const body = await res.json()
     capCache = { at: Date.now(), data: body }
     return body
@@ -212,7 +226,7 @@ async function callCapability(name, params) {
     return { ok: false, capability: name, error: `没有这个能力：${name}`, available: list.map((c) => c.name) }
   }
   const p = params && typeof params === 'object' ? params : {}
-  let url = `http://127.0.0.1:${WB_PORT}${cap.route}`
+  let url = `http://127.0.0.1:${wbPort()}${cap.route}`
   const init = { method: cap.method, headers: { accept: 'application/json' }, signal: AbortSignal.timeout(60000) }
   if (cap.method === 'GET') {
     const qs = new URLSearchParams()
@@ -252,7 +266,7 @@ async function statusPayload() {
   ])
   return {
     workbench: {
-      port: WB_PORT,
+      port: wbPort(),
       reachable: health.reachable,
       pid: health.pid ?? null,
       stateDir: health.stateDir ?? null,
@@ -442,8 +456,8 @@ export function apply(ctx) {
         },
         render: (_args, value) =>
           value.reachable
-            ? [{ type: 'text', text: `工作台已接入（${WB_PORT}）：DSH ${value.version ?? '?'} · 服务 ${value.services ?? '?'} · 槽位 ${value.slots ?? '?'}` }]
-            : [{ type: 'text', text: `工作台未接入（${WB_PORT}）：${value.reason ?? '不可达'}` }],
+            ? [{ type: 'text', text: `工作台已接入（${wbPort()}）：DSH ${value.version ?? '?'} · 服务 ${value.services ?? '?'} · 槽位 ${value.slots ?? '?'}` }]
+            : [{ type: 'text', text: `工作台未接入（${wbPort()}）：${value.reason ?? '不可达'}` }],
       },
       async execute() {
         const s = (await statusPayload()).workbench

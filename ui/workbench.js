@@ -294,7 +294,7 @@
     bar.dataset.wbSig = plan.all.map((t) => t.label).join('|')
     const brand = document.createElement('div')
     brand.className = 'wb-brand'
-    brand.innerHTML = 'DSH 工作台<small>59430</small>'
+    brand.innerHTML = `DSH 工作台<small>${state.port || 59430}</small>`
     bar.appendChild(brand)
 
     for (const tab of plan.left) {
@@ -509,7 +509,14 @@
         if (!KEEP_NAV.includes(title)) KEEP_NAV.push(title)
       }
       state.uiConfig = { extra, keepNav: KEEP_NAV.slice() }
-    } catch { /* 读不到就用基础白名单 */ }
+      // 端口从服务端读（客户机上可能是 59431 之类），别在界面里写死 59430
+      if (body && Number.isInteger(body.port) && body.port > 0) {
+        state.port = body.port
+        document.documentElement.style.setProperty('--wb-port', String(body.port))
+        const brand = document.querySelector('#wb-topbar .wb-brand small')
+        if (brand) brand.textContent = String(body.port)
+      }
+    } catch { /* 读不到就用基础白名单 / 默认端口 */ }
   }
 
   // 精确找“行容器”：类名必须以 _row/_group/_setting 结尾（不能用 *="_row"，

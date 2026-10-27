@@ -18,7 +18,7 @@ import re
 import sys
 from pathlib import Path
 
-WB_ROOT = Path(r"E:\DSH-WORKBENCH")
+WB_ROOT = Path(os.environ.get("DSH_WORKBENCH_ROOT") or Path(__file__).resolve().parent.parent)
 APP_ROOT = WB_ROOT / "app"
 OUT_DEFAULT = WB_ROOT / "state" / "api-live.json"
 

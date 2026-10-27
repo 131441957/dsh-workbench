@@ -35,7 +35,7 @@ import zipfile
 from pathlib import Path
 
 # ── 常量 ────────────────────────────────────────────────────────────────
-WB_ROOT = Path(r"E:\DSH-WORKBENCH")
+WB_ROOT = Path(os.environ.get("DSH_WORKBENCH_ROOT") or Path(__file__).resolve().parent.parent)
 MAIN_HOME = Path(r"E:\DSH\home")
 MAIN_INSTALL = Path(r"E:\SSS")
 
@@ -45,7 +45,8 @@ APP_DSH_CMD = APP_ROOT / r"resources\runtime\cli\bin\dsh.cmd"
 
 WB_HOME = WB_ROOT / "home"
 WB_PROFILE = "bench"
-WB_PORT = 59430
+WB_PORT_DEFAULT = 59430
+WB_PORT = WB_PORT_DEFAULT            # 运行期由 load_port() 覆盖（config.json / 环境变量）
 RESERVED_PORTS = {59420, 59430}      # 旧副驾 / 工作台：同一个 exe，别算成主驾
 LOG_DIR = WB_ROOT / "logs"
 STATE_DIR = WB_ROOT / "state"
@@ -1085,7 +1086,7 @@ def cmd_install_plugin(spec: str, keep_nav: str = "", no_restart: bool = False) 
         except Exception:
             fresh = ""
         if "EADDRINUSE" in fresh or "startup failed" in fresh:
-            warn("本次启动日志里有 EADDRINUSE / startup failed —— 确认 59430 只有一个 owner（见 docs）")
+            warn(f"本次启动日志里有 EADDRINUSE / startup failed —— 确认 {WB_PORT} 只有一个 owner（见 docs）")
         else:
             ok("本次启动没有 EADDRINUSE / startup failed")
 
@@ -1283,6 +1284,212 @@ def cmd_detach(target_home: str = "", target_profile: str = "desktop",
     if not no_install:
         _run_profile_install(home, target_profile)
     warn("重启目标 harness 后桥才真正卸载（在那之前它还在进程里跑着）")
+    return 0
+
+
+def config_path() -> Path:
+    return WB_ROOT / "config.json"
+
+
+def config_load() -> dict:
+    try:
+        data = json.loads(config_path().read_text(encoding="utf-8-sig"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def config_save(cfg: dict) -> None:
+    config_path().write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def load_port() -> int:
+    """端口优先级：config.json 的 port → 环境变量 DSH_WORKBENCH_PORT → 59430。"""
+    global WB_PORT
+    port = config_load().get("port")
+    if not isinstance(port, int) or not (1 <= port <= 65535):
+        try:
+            port = int(os.environ.get("DSH_WORKBENCH_PORT") or 0) or WB_PORT_DEFAULT
+        except Exception:
+            port = WB_PORT_DEFAULT
+    WB_PORT = port
+    RESERVED_PORTS.add(WB_PORT)
+    return WB_PORT
+
+
+def port_free(port: int) -> bool:
+    import socket as _socket
+    with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.4)
+        return sock.connect_ex(("127.0.0.1", port)) != 0
+
+
+def pick_port(preferred: int, tries: int = 30) -> int:
+    """从 preferred 往上找一个没人占的端口（客户机上 59430 可能被别人占了）。"""
+    for offset in range(tries):
+        candidate = preferred + offset
+        if candidate > 65535:
+            break
+        if candidate in RESERVED_PORTS and candidate != preferred:
+            continue
+        if port_free(candidate):
+            return candidate
+    return preferred
+
+
+def save_port(port: int) -> None:
+    global WB_PORT
+    WB_PORT = port
+    RESERVED_PORTS.add(port)
+    cfg = config_load()
+    cfg["port"] = port
+    cfg["portUpdatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    config_save(cfg)
+
+
+# ── 分发包 ────────────────────────────────────────────────────────────
+DIST_EXCLUDE_DIRS = {"app", "home", "state", "logs", "backups", "attic", "ref", "dist",
+                     ".git", "node_modules", "__pycache__", ".pnpm-store"}
+DIST_EXCLUDE_PLUGINS = {"dshmarket"}   # 测试插件，不进分发版
+
+
+def _dist_version() -> str:
+    f = WB_ROOT / "VERSION"
+    if f.exists():
+        try:
+            return f.read_text(encoding="utf-8-sig").strip() or "0.0.0"
+        except Exception:
+            pass
+    return "0.1.0-" + time.strftime("%Y%m%d")
+
+
+def cmd_pack(out: str = "", include_test: bool = False, force: bool = False) -> int:
+    """打一个可分发目录：源码/插件/界面/文档/种子，不含运行时、状态、备份与本机配置。"""
+    ver = _dist_version()
+    dest = Path(out) if out else (WB_ROOT / "dist" / f"DSH-Workbench-{ver}")
+    head(f"打包工作台 {ver} → {dest}")
+    if dest.exists():
+        if not force:
+            bad("目标已存在；加 --force 覆盖")
+            return 1
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+
+    def ignore(_dir, names):
+        return [n for n in names if n in DIST_EXCLUDE_DIRS or n.endswith(".pyc")]
+
+    for name in ("tools", "ui", "docs", "seeds"):
+        src = WB_ROOT / name
+        if not src.exists():
+            continue
+        if name == "docs":
+            # 只带面向使用者的文档；内部交接/事故记录里的本机路径不进分发包
+            (dest / "docs").mkdir(parents=True, exist_ok=True)
+            for f in sorted(src.glob("*")):
+                if not f.is_file():
+                    continue
+                if any(f.name.startswith(p) for p in ("handoff", "upgrade-policy", "meow-memory-", "dsh-issue-", "plugin-manager-gaps", "tools-plan")):
+                    continue
+                shutil.copy2(f, dest / "docs" / f.name)
+            info(f"已复制 docs/（内部记录已排除）")
+            continue
+        shutil.copytree(src, dest / name, ignore=ignore, dirs_exist_ok=True)
+        info(f"已复制 {name}/")
+
+    (dest / "plugins").mkdir(exist_ok=True)
+    plugins = []
+    excluded_plugins = []
+    for p in sorted((WB_ROOT / "plugins").iterdir()):
+        if not p.is_dir() or p.name in DIST_EXCLUDE_DIRS:
+            continue
+        if p.name in DIST_EXCLUDE_PLUGINS and not include_test:
+            excluded_plugins.append(p.name)
+            continue
+        try:
+            meta = json.loads((p / "package.json").read_text(encoding="utf-8-sig"))
+        except Exception:
+            meta = {}
+        shutil.copytree(p, dest / "plugins" / p.name, ignore=ignore, dirs_exist_ok=True)
+        plugins.append({"name": meta.get("name", p.name), "version": meta.get("version", "?")})
+    info(f"已复制 plugins/{len(plugins)} 个" + (f"（排除 {excluded_plugins}）" if excluded_plugins else ""))
+
+    (dest / "config.template.json").write_text(json.dumps({
+        "port": 59430,
+        "note": "复制为 config.json 后按需改端口；install/home 路径在首次运行 wb.py doctor 时自动识别",
+    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    (dest / "README.md").write_text(f"""# DSH 工作台 {ver}（分发包）
+
+工作台 = 独立的 DSH 运行时副本 + 自带插件宿主，用来装/改插件而不碰你的主 harness。
+主 harness 只加一个**软依赖**接入层（`dsh-workbench-bridge`），可随时 `detach` 撤掉。
+
+## 前置
+
+- Windows；已安装 DeepSeek Harness（本包不含它的运行时，会从你的安装复制一份）
+- Python 3.10+（`python` 在 PATH 里）
+
+## 三步装好
+
+```powershell
+# 1) 安装：复制一份你自己的 harness 运行时到 workbench\\app，并准备好 profile
+python tools\\wb.py install
+
+# 2) 接入：把软依赖桥装进你的 harness profile（先预览，确认后加 --apply）
+python tools\\wb.py attach
+python tools\\wb.py attach --apply
+
+# 3) 打开页面（装完 attach 后要重启一次 harness 才生效）
+python tools\\wb.py page
+```
+
+## 改界面
+
+界面改造全部走 `ui\\`（`workbench.css` + `workbench.js`），由 `plugins\\dsh-wb-ui` 用
+`webServer.tapIndex` 注入首页——**和 harness 改 webui 是同一套机制**，见 `ui\\README.md`。
+删掉 `ui\\` 里的文件即恢复原版界面。
+
+## 装插件
+
+```powershell
+python tools\\wb.py plugin-info   <包名>          # 侦察：会露在哪、要什么权限
+python tools\\wb.py install-plugin <包名>         # 装 + 登记界面白名单 + 安全重启 + 验证
+python tools\\wb.py uninstall-plugin <包名>       # 卸干净
+python tools\\wb.py fix-ui                        # 从别处装的插件，跑这个补齐治理
+```
+
+## 不要提交/分发的东西
+
+`app\\`（运行时副本，1.7GB）、`home\\`、`state\\`、`logs\\`、`backups\\`。
+`tools\\wb.py backup` 只备份源码类内容；`state\\plugin-notes.json` 与 `state\\ui-config.json` 会一起备份。
+""", encoding="utf-8")
+
+    marker = "E:" + chr(92) + "DSH-WORKBENCH"   # 本机绝对路径标记（别写成双反斜杠，会数出 0）
+    hits = 0
+    for f in dest.rglob("*"):
+        if f.is_file() and f.suffix.lower() in {".py", ".js", ".mjs", ".json", ".yml", ".md", ".cmd", ".ps1"}:
+            try:
+                hits += f.read_text(encoding="utf-8", errors="replace").count(marker)
+            except Exception:
+                pass
+
+    manifest = {
+        "name": "DSH-Workbench",
+        "version": ver,
+        "builtAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "plugins": plugins,
+        "excludedPlugins": excluded_plugins,
+        "testOnlyPlugins": sorted(DIST_EXCLUDE_PLUGINS),
+        "excludedDirs": sorted(DIST_EXCLUDE_DIRS),
+        "files": sum(1 for f in dest.rglob("*") if f.is_file()),
+        "absolutePathHits": hits,
+        "note": "testOnlyPlugins 是仅用于本机试验的插件（如插件市场），不进分发版；absolutePathHits 必须为 0 才算可移植",
+    }
+    (dest / "MANIFEST.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    ok(f"分发包就绪：{dest}")
+    info(f"文件 {manifest['files']} 个，插件 {len(plugins)} 个，本机绝对路径残留 {hits} 处")
+    if hits:
+        warn("还有本机绝对路径，客户机上可能出问题（台账 DIST-02/03）")
     return 0
 
 
@@ -1504,7 +1711,7 @@ def cmd_page() -> int:
 
         if not port_open(WB_PORT):
             bad(f"工作台没起来（{WB_PORT} 无响应）。看日志：wb.py logs")
-            open_landing("工作台进程没起来（端口 59430 无响应）")
+            open_landing(f"工作台进程没起来（端口 {WB_PORT} 无响应）")
             return 1
 
         url = current_url()
@@ -2164,6 +2371,13 @@ def sync_credentials() -> None:
         shutil.copy2(anon, WB_HOME / ".anonymous-user-id")
 
 
+def render_seed(text: str) -> str:
+    """种子里的 ${WB_ROOT} / ${WB_HOME} 换成当前机器的真实路径（分发版靠这个保持可移植）。"""
+    return (text
+            .replace("${WB_ROOT}", WB_ROOT.resolve().as_posix())
+            .replace("${WB_HOME}", WB_HOME.resolve().as_posix()))
+
+
 def ensure_profile() -> int:
     prof_dir = WB_HOME / "profiles" / WB_PROFILE
     pkg = prof_dir / "package.json"
@@ -2180,8 +2394,13 @@ def ensure_profile() -> int:
         if seed_dir.exists() and pkg.exists():
             for f in seed_dir.iterdir():
                 if f.is_file():
-                    (pkg.parent / f.name).write_bytes(f.read_bytes())
-            ok(f"已套用种子：{seed_dir}")
+                    try:
+                        text = f.read_text(encoding="utf-8-sig")
+                    except Exception:
+                        (pkg.parent / f.name).write_bytes(f.read_bytes())
+                        continue
+                    (pkg.parent / f.name).write_text(render_seed(text), encoding="utf-8")
+            ok(f"已套用种子：{seed_dir}（${{WB_ROOT}} 已渲染成本机路径）")
     if not pkg.exists():
         bad(f"profile 创建失败：{pkg}")
         return 1
@@ -2192,6 +2411,15 @@ def ensure_profile() -> int:
 
 
 # ── 启动 / 停止 ─────────────────────────────────────────────────────────
+def is_our_workbench(port: int) -> bool:
+    """端口上那个进程是不是我们的工作台（用 /wb-ui 的 uiDir 认领）。"""
+    try:
+        data = http_json(f"http://127.0.0.1:{port}/wb-ui", timeout=2.0)
+        return bool(data.get("ok")) and "uiDir" in data
+    except Exception:
+        return False
+
+
 def cmd_start(with_watchdog: bool = True) -> int:
     head("启动工作台")
     if not APP_DSH_CMD.exists():
@@ -2204,8 +2432,15 @@ def cmd_start(with_watchdog: bool = True) -> int:
 
     pids_existing = listening_pids(WB_PORT)
     if pids_existing:
-        warn(f"已经在跑（端口 {WB_PORT}，pid={pids_existing}）")
-        return 0
+        if is_our_workbench(WB_PORT):
+            warn(f"已经在跑（端口 {WB_PORT}，pid={pids_existing}）")
+            return 0
+        new_port = pick_port(WB_PORT + 1)
+        if new_port == WB_PORT:
+            bad(f"端口 {WB_PORT} 被别的程序占着，且找不到可用端口")
+            return 1
+        warn(f"端口 {WB_PORT} 被别的程序占了，改用 {new_port}（已写进 config.json）")
+        save_port(new_port)
 
     if ensure_profile() != 0:
         return 1
@@ -2597,6 +2832,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--target-profile", dest="target_profile", default="desktop")
     ap.add_argument("--apply", dest="apply", action="store_true")
     ap.add_argument("--no-install", dest="no_install", action="store_true")
+    ap.add_argument("--out", dest="out", default="")
+    ap.add_argument("--include-test", dest="include_test", action="store_true")
     ap.add_argument("-n", type=int, default=40)
     args = ap.parse_args(argv[1:])
 
@@ -2606,6 +2843,10 @@ def main(argv: list[str]) -> int:
             load_paths(redetect=args.redetect, install=args.install or None, home=args.home or None)
         except Exception as exc:  # noqa: BLE001
             warn(f"路径识别失败，用默认值：{exc}")
+        try:
+            load_port()  # 端口同理：config.json 优先，其次环境变量，最后 59430
+        except Exception as exc:  # noqa: BLE001
+            warn(f"端口读取失败，用默认值 {WB_PORT_DEFAULT}：{exc}")
 
     table = {
         "doctor": lambda: cmd_doctor(),
@@ -2623,6 +2864,7 @@ def main(argv: list[str]) -> int:
         "fix-ui": lambda: cmd_fix_ui(),
         "attach": lambda: cmd_attach(args.target_home, args.target_profile, args.apply, args.no_install),
         "detach": lambda: cmd_detach(args.target_home, args.target_profile, args.apply, args.no_install),
+        "pack": lambda: cmd_pack(args.out or "", args.include_test, args.force),
         "url": lambda: cmd_url(),
         "open": lambda: cmd_open(),
         "page": lambda: cmd_page(),

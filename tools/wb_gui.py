@@ -24,9 +24,9 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, scrolledtext, ttk
 
-WB_ROOT = Path(r"E:\DSH-WORKBENCH")
+WB_ROOT = Path(os.environ.get("DSH_WORKBENCH_ROOT") or Path(__file__).resolve().parent.parent)
 WB_PY = WB_ROOT / "tools" / "wb.py"
-NODE_EXE = Path(r"E:\nodejs\node.exe")
+NODE_EXE = Path(os.environ.get("NODE_EXE") or r"E:\nodejs\node.exe")
 
 
 def python_console() -> str:

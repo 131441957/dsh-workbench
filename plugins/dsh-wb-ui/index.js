@@ -103,7 +103,8 @@ export function apply(ctx) {
       return
     }
 
-    // 界面裁剪的白名单：装插件时由 wb.py install-plugin 自动写入 state\ui-config.json
+    // 界面裁剪的白名单 + 端口：装插件时由 wb.py install-plugin 自动写入 state\ui-config.json；
+    // 端口来自 config.json（客户机上 59430 可能被占，工作台会换端口）
     if (url.pathname === '/wb-ui/config') {
       let cfg = {}
       try {
@@ -111,9 +112,14 @@ export function apply(ctx) {
       } catch {
         cfg = {}
       }
+      let port = 59430
+      try {
+        const root = JSON.parse(readFileSync(join(WB_ROOT, 'config.json'), 'utf8'))
+        if (Number.isInteger(root.port) && root.port > 0) port = root.port
+      } catch { /* 用默认端口 */ }
       const keepNav = Array.isArray(cfg.keepNav) ? cfg.keepNav.filter((x) => typeof x === 'string') : []
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-      res.end(JSON.stringify({ ok: true, keepNav }))
+      res.end(JSON.stringify({ ok: true, keepNav, port }))
       return
     }
 

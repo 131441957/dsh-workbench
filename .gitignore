@@ -10,3 +10,5 @@ attic/
 config.json
 ui/landing.html
 MANIFEST.json
+
+dist/

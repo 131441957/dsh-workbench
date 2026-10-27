@@ -26,7 +26,7 @@ function sendJson(res, status, body) {
 const titleCache = new Map()
 
 function dshHome() {
-  // 工作台进程自己的 DSH_HOME 指向 E:\DSH-WORKBENCH\home，
+  // 工作台进程自己的 DSH_HOME 指向工作台的 home 目录，
   // 主驾的会话日志在 config.json 记录的 home 里，所以优先读 config.json。
   try {
     const cfg = JSON.parse(readFileSync(join(WB_ROOT, 'config.json'), 'utf8'))
