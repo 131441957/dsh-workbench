@@ -8,8 +8,10 @@
 #    要「看不见」这些界面，用 ui/workbench.js 按文字隐藏（不动插件）。
 - id: ui-schedule
   disabled: true
-- id: ui-plugin-manager
-  disabled: true
+# ⚠️ 不要禁用 ui-plugin-manager：它提供 pluginNavigation 服务，
+#    0.2.1-rc.3 起 @deepseek-ai/dsh-client-ui-entry-customization 依赖该服务，
+#    一禁用客户端就整页 "Failed to load plugins: 1 entry did not activate"。
+#    看不见它的入口可以靠 ui\workbench.js 的顶栏过滤，而不是关插件。
 # 预览版说明的已读版本（volatile 字段，只能放包补丁；用户补丁层会被应用重写抹掉）
 - id: ui-settings-general
   name: "@deepseek-ai/dsh-client-ui-settings-general"

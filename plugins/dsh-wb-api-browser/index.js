@@ -1,15 +1,32 @@
 // dsh-wb-api-browser — host half.
 // 做两件事：①把工作台 state/ 里采集好的接口基线用 HTTP 暴露出来；②读写"插件备注"。
-import { readFile, writeFile, rename, mkdir, readdir, stat } from 'node:fs/promises'
+import { readFile, writeFile, rename, mkdir, readdir, stat, access } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 export const inject = ['webServer']
 
 const PREFIX = '/wb-api'
 
+// 自己的根目录：优先环境变量，其次从本文件位置推导（plugins/<name>/index.js → 上两级）。
+// 别写死 E:\DSH-WORKBENCH：同一台机器上可以有多套工作台（例如 rc.3 验收床）。
+const PLUGIN_DIR = fileURLToPath(new URL('.', import.meta.url))
+const WB_ROOT = process.env.DSH_WORKBENCH_ROOT || join(PLUGIN_DIR, '..', '..')
+
 function stateDir() {
-  return join(process.env.DSH_WORKBENCH_ROOT || 'E:\\DSH-WORKBENCH', 'state')
+  return join(WB_ROOT, 'state')
+}
+
+/** 自己的工作台 home（不是主驾 home）：<root>/home 里若有 profiles 就用它。 */
+async function workbenchHome() {
+  const own = join(WB_ROOT, 'home')
+  try {
+    await access(join(own, 'profiles'))
+    return own
+  } catch {
+    return process.env.DSH_HOME || own
+  }
 }
 
 // ── 插件备注：用户自己写的"这插件干嘛的/为什么装"，落在 state\plugin-notes.json ──
@@ -73,7 +90,7 @@ async function loadRegistry() {
 }
 
 async function collectPlugins() {
-  const home = process.env.DSH_HOME || 'E:\\DSH-WORKBENCH\\home'
+  const home = await workbenchHome()
   const profileDir = join(home, 'profiles', 'bench')
   let pkg
   try {
@@ -139,7 +156,7 @@ async function collectPlugins() {
 //    主驾桥读这里，按名字调用（这就是「工作台插件能被主 harness 调用」的通用通路）。
 //    声明形状：{ name, description, method?('GET'|'POST'), route:'/wb-xxx/yyy', query?:['id'], body?:['text'] }
 function pluginsRoot() {
-  return join(process.env.DSH_WORKBENCH_ROOT || 'E:\\DSH-WORKBENCH', 'plugins')
+  return join(WB_ROOT, 'plugins')
 }
 
 async function collectCapabilities() {
@@ -218,7 +235,7 @@ function serviceList(ctx) {
 
 // ── profile 分层：跑一次 dsh --dump-config 重算（只在点「刷新」时执行）──────
 function cliPath() {
-  const root = process.env.DSH_WORKBENCH_ROOT || 'E:\\DSH-WORKBENCH'
+  const root = WB_ROOT
   return join(root, 'app', 'resources', 'runtime', 'cli', 'bin', 'dsh.cmd')
 }
 
@@ -292,7 +309,7 @@ async function liveSnapshot(ctx) {
 
 async function refreshBuild() {
   const cli = cliPath()
-  const root = process.env.DSH_WORKBENCH_ROOT || 'E:\\DSH-WORKBENCH'
+  const root = WB_ROOT
   const home = process.env.DSH_HOME || join(root, 'home')
   const profile = process.env.DSH_PROFILE || 'bench'
   const stdout = await new Promise((resolve, reject) => {

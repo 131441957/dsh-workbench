@@ -251,26 +251,34 @@ def load_paths(redetect: bool = False, install: str | None = None, home: str | N
         MAIN_HOME = Path(home)
         home_src = "手动指定"
         changed = True
-    elif redetect or not cfg.get("home") or not valid_home(Path(cfg.get("home", ""))):
-        found, why = detect_home(MAIN_INSTALL if valid_install(MAIN_INSTALL) else None)
-        if found:
-            MAIN_HOME = found
-            home_src = why
-        else:
-            MAIN_HOME = Path(cfg.get("home") or MAIN_HOME)
-        changed = True
     else:
-        MAIN_HOME = Path(cfg["home"])
+        cfg_home = Path(cfg.get("home") or "")
+        # 显式指定过的 home（哪怕还是空目录）不许被环境变量顶掉——多套工作台共存时
+        # 这条一旦失守，第二套会静默用上主 home。
+        explicit_home = cfg.get("homeSource") == "手动指定" and cfg_home.is_dir() and str(cfg_home) not in ("", ".")
+        if redetect or not cfg.get("home") or not (valid_home(cfg_home) or explicit_home):
+            found, why = detect_home(MAIN_INSTALL if valid_install(MAIN_INSTALL) else None)
+            if found:
+                MAIN_HOME = found
+                home_src = why
+            else:
+                MAIN_HOME = Path(cfg.get("home") or MAIN_HOME)
+            changed = True
+        else:
+            MAIN_HOME = Path(cfg["home"])
 
     if changed or not CONFIG_FILE.exists():
         CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        CONFIG_FILE.write_text(json.dumps({
+        # 保留已有的其它键（port / 自定义字段），别把整个文件重写成 4 个键
+        out = dict(cfg)
+        out.update({
             "install": str(MAIN_INSTALL),
             "installSource": inst_src,
             "home": str(MAIN_HOME),
             "homeSource": home_src,
             "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        })
+        CONFIG_FILE.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
 
     if not quiet:
         ok(f"安装目录 {MAIN_INSTALL}（{inst_src}）")
@@ -1927,6 +1935,15 @@ def current_url() -> str | None:
     """取最新的带 token 入口（token 每次重启都换）。"""
     log = LOG_DIR / "workbench.out.log"
     if log.exists():
+        # 以日志里最后一条 "dsh web: http://127.0.0.1:<端口>/?token=<token>" 为准，
+        # 不要用 WB_PORT 去拼——端口被自动避让/手工改过时拼出来是错的。
+        hits = re.findall(r"dsh web: (http://127\.0\.0\.1:\d+/\?token=[A-Za-z0-9_\-]+)", 
+                          log.read_text(encoding="utf-8", errors="replace"))
+        if hits:
+            url = hits[-1]
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            (STATE_DIR / "workbench-url.txt").write_text(url, encoding="ascii")
+            return url
         tokens = re.findall(r"token=([A-Za-z0-9_\-]+)", log.read_text(encoding="utf-8", errors="replace"))
         if tokens:
             url = f"http://127.0.0.1:{WB_PORT}/?token={tokens[-1]}"
