@@ -528,16 +528,29 @@ def read_pids() -> dict:
 
 
 def find_supervisors() -> list[int]:
-    """按命令行扫 pythonw 里的 `wb.py supervise`（防止记录丢失/重复）。"""
+    """按命令行扫 pythonw 里的 `wb.py supervise`（防止记录丢失/重复）。
+
+    ⚠️ 必须按**根目录**过滤：本机可能并存多套工作台（主套 / 测试床），
+    早期版本不带过滤，卸载/暂停其中一套会把另一套的 supervisor 一起杀掉（2026-10-27 踩过）。
+    """
+    root = str(WB_ROOT).replace("\\", "\\\\")
     ps = ("Get-CimInstance Win32_Process -Filter \"Name = 'pythonw.exe' or Name = 'python.exe'\" | "
           "Where-Object { $_.CommandLine -like '*wb.py*supervise*' } | "
-          "Select-Object -ExpandProperty ProcessId")
+          "ForEach-Object { '{0}|{1}' -f $_.ProcessId, $_.CommandLine }")
     try:
         out = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True,
                              timeout=40, creationflags=RUNFLAGS, encoding="utf-8", errors="replace").stdout
-        return [int(x) for x in out.split() if x.strip().isdigit()]
     except Exception:
         return []
+    pids = []
+    for line in (out or "").splitlines():
+        pid_s, _, cmd = line.strip().partition("|")
+        if not pid_s.strip().isdigit():
+            continue
+        # 只认命令行里带**本根**路径的那个
+        if str(WB_ROOT).lower() in cmd.lower().replace("/", "\\"):
+            pids.append(int(pid_s.strip()))
+    return pids
 
 
 def write_pids(data: dict) -> None:
@@ -2620,6 +2633,112 @@ def cmd_resume() -> int:
 # ── 快捷方式修复：把桌面/启动项指回**当前这个根** ─────────────────────────────
 # 场景：在多套工作台之间折腾（例如给测试床跑 install）会把宿主的快捷方式改指向测试目录，
 # 测完删掉目录就变成死链。这条命令用来一条命令修回来。
+# ── 卸载工作台本体：停服务 → 摘快捷方式 →（可选）摘接入层 →（可选）删目录 ──────
+# 默认**只演练**：打印"会停什么、删哪些快捷方式、删哪些目录、多大"，不动手。
+#   --apply            真的执行（停服务 + 删指向本根的快捷方式）
+#   --purge            连目录一起删（要配合 --apply）。删除动作交给 %TEMP% 里的小脚本，
+#                      否则正在运行的 python 会被自己删掉一半。
+#   --detach           顺带把主驾 profile 里的接入层摘掉（会重启目标 harness 才生效）
+# 注意：只删**指向本根**的快捷方式——多套工作台共存时，别把别人的入口删了。
+def cmd_uninstall(purge: bool = False, do_detach: bool = False, apply: bool = False) -> int:
+    head("卸载工作台" + ("" if apply else "（演练，不改动）"))
+    ok(f"根目录 {WB_ROOT}")
+    size = dir_size(WB_ROOT)
+    info(f"占用：{size[0]} 文件 / {size[1] / 1048576:.0f} MB")
+
+    # ① 会停掉什么
+    head("将停止")
+    pids = read_pids()
+    for name in ("serve", "watchdog", "supervisor"):
+        pid = int(pids.get(name) or 0)
+        info(f"{name:<12} pid={pid or '-'}{'（运行中）' if pid and pid_alive(pid) else ''}")
+    if find_supervisors():
+        info(f"supervisor  另有进程在跑")
+
+    # ② 哪些快捷方式指向本根（只动这些）
+    head("将移除的快捷方式（只删指向本根的）")
+    desktop = Path(os.environ.get("USERPROFILE", r"C:\Users\Administrator")) / "Desktop"
+    startup = Path(os.environ.get("APPDATA", "")) / r"Microsoft\Windows\Start Menu\Programs\Startup"
+    targets = [desktop / "DSH 工作台.lnk", desktop / "DSH 工作台 安装器.lnk",
+               startup / "DSH 工作台（自动伴随）.lnk"]
+    ours: list[Path] = []
+    for lnk in targets:
+        if not lnk.exists():
+            continue
+        hit = False
+        try:
+            probe = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 f"(New-Object -ComObject WScript.Shell).CreateShortcut('{lnk}').Arguments"],
+                capture_output=True, text=True, timeout=30, creationflags=RUNFLAGS,
+                encoding="utf-8", errors="replace")
+            hit = str(WB_ROOT) in (probe.stdout or "")
+        except Exception:
+            hit = False
+        if hit:
+            ours.append(lnk)
+            info(f"{lnk}")
+        else:
+            warn(f"{lnk} 指向别处，跳过")
+
+    # ③ 接入层
+    if do_detach:
+        head("接入层")
+        profiles = [(p.name) for p in (MAIN_HOME / "profiles").glob("*") if (p / "package.json").exists()] \
+            if (MAIN_HOME / "profiles").exists() else []
+        for name in profiles:
+            meta = _profile_manifest(MAIN_HOME / "profiles" / name)
+            deps = meta.get("dependencies") if isinstance(meta.get("dependencies"), dict) else {}
+            if BRIDGE_PKG in deps:
+                info(f"{name}：里有 {BRIDGE_PKG}，将摘掉（要重启那个 harness 才生效）")
+
+    if not apply:
+        head("演练结束")
+        info("真删加参数：--apply（停服务 + 删上面的快捷方式）")
+        info("连目录一起删：--apply --purge")
+        info(f"要删的目录：{WB_ROOT}（{size[1] / 1048576:.0f} MB）")
+        return 0
+
+    # ④ 真执行
+    cmd_suspend()
+    removed = 0
+    for lnk in ours:
+        try:
+            lnk.unlink()
+            ok(f"已删除 {lnk.name}")
+            removed += 1
+        except Exception as exc:  # noqa: BLE001
+            warn(f"删不掉 {lnk.name}：{exc}")
+
+    if do_detach:
+        for p in (MAIN_HOME / "profiles").glob("*"):
+            if (p / "package.json").exists():
+                meta = _profile_manifest(p)
+                deps = meta.get("dependencies") if isinstance(meta.get("dependencies"), dict) else {}
+                if BRIDGE_PKG in deps:
+                    cmd_detach(str(MAIN_HOME), p.name, True, True)
+
+    if purge:
+        # 自己删自己不行：写一个临时脚本，延迟 2 秒后删根目录并自杀
+        tmp = Path(os.environ.get("TEMP", ".")) / f"wb-uninstall-{int(time.time())}.cmd"
+        tmp.write_text(
+            "@echo off\r\n"
+            "timeout /t 2 /nobreak >nul\r\n"
+            f'rmdir /s /q "{WB_ROOT}"\r\n'
+            f'del /f /q "%~f0"\r\n',
+            encoding="gbk", errors="replace")
+        subprocess.Popen(["cmd", "/c", str(tmp)], creationflags=DETACHED | NO_WINDOW,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        ok("已启动清理脚本（2 秒后删除整个目录）")
+        info(f"目录：{WB_ROOT}（{size[1] / 1048576:.0f} MB）——几秒后自己消失")
+    else:
+        head("卸载完成（目录保留）")
+        info(f"要彻底删掉，直接删除这个目录：{WB_ROOT}")
+        info("或者重跑：wb.py uninstall --apply --purge")
+    info(f"快捷方式处理：{removed} 个，其余未指向本根的不动")
+    return 0
+
+
 def cmd_shortcuts() -> int:
     head("重建快捷方式（指向当前根）")
     ok(f"根目录 {WB_ROOT}")
@@ -3784,6 +3903,9 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--json", dest="as_json", action="store_true")
     ap.add_argument("--refresh", dest="force", action="store_true")
     ap.add_argument("--zip", dest="zip_out", action="store_true")
+    # uninstall 专用
+    ap.add_argument("--purge", dest="purge", action="store_true")
+    ap.add_argument("--detach", dest="detach_bridge", action="store_true")
     # setup 专用开关
     ap.add_argument("--no-attach", dest="no_attach", action="store_true")
     ap.add_argument("--open", dest="open_page", action="store_true")
@@ -3852,6 +3974,7 @@ def main(argv: list[str]) -> int:
             (args.rest[0] if args.rest else (args.sub or "")), args.apply),
         "logs": lambda: cmd_logs(args.n),
         "shortcuts": lambda: cmd_shortcuts(),
+        "uninstall": lambda: cmd_uninstall(args.purge, args.detach_bridge, args.apply),
         "watchdog": lambda: cmd_watchdog([int(x) for x in args.main_pids.split(",") if x.strip()]),
     }
     if args.command not in table:

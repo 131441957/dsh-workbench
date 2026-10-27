@@ -97,10 +97,29 @@ python tools\wb.py restore --from latest     # 或者直接还原最近一份快
 它只改**你的 profile 里 `package.json`**（加一条 `link:` 依赖 + 一个 bundle），写之前会备份到 `backups\attach-<时间>\`；`python tools\wb.py detach --apply` 可完全撤销。**不碰安装目录、不碰 app.asar。**
 
 **Q5：怎么彻底卸载？**
+
+一条命令就够（默认只演练，看清楚再加 `--apply`）：
+
 ```powershell
-python tools\wb.py detach --apply    # 先摘接入层
+python tools\wb.py uninstall                        # 演练：列出会停的服务、会删的快捷方式、目录多大
+python tools\wb.py uninstall --apply                # 真做：停服务/守护 + 删指向本目录的快捷方式
+python tools\wb.py uninstall --apply --purge        # 连目录一起删（几秒后自己消失）
+python tools\wb.py uninstall --apply --purge --detach   # 顺带把接入层从你的 harness profile 摘掉
+```
+
+要点：
+
+- **只删指向本目录的快捷方式**，多套工作台共存时不会误删别人的入口
+- `--detach` 会改你的 harness profile（摘掉桥），需要**重启那个 harness** 才生效
+- `--purge` 不自删自己：它写一个临时脚本，延迟 2 秒把整个目录删掉
+
+手工等价操作（万一命令跑不了）：
+
+```powershell
+python tools\wb.py detach --apply    # 摘接入层
 python tools\wb.py suspend           # 停服务与自动伴随
-# 然后删掉整个工作台目录即可（它自带运行时副本，不在系统里留东西）
+# 手动删掉桌面「DSH 工作台」「DSH 工作台 安装器」+ 启动项「DSH 工作台（自动伴随）」
+# 最后删掉整个工作台目录（它自带运行时副本，不在系统里留东西）
 ```
 
 ## 5. 这套东西的边界
