@@ -183,6 +183,8 @@
         settingsNavVisible: allBySuffix('navCell')
           .filter((c) => !c.classList.contains('wb-hidden'))
           .map((c) => (c.textContent || '').replace(/\s+/g, ' ').trim()).slice(0, 16),
+        // 设置左侧导航的"最终去留"：哪一格被我们藏了、为什么（inTopbar=true 才是合理的隐藏）
+        settingsNavPlan: (state.settingsNavPlan || []).slice(0, 16),
         discovered: scanSidebarEntries().map((e) => e.label),
         errors: state.errors.slice(0, 12),
         consoleErrors: (state.consoleErrors || []).slice(0, 12),
@@ -1180,10 +1182,24 @@
     // 插件设置分区已经提到顶栏 → 设置弹层里不再重复列一遍（用户 2026-10-27：
     // 「这几个插件的设置窗口位置不太好，应该放到顶栏」）。元素只是隐藏，程序化 click
     // 依然有效，所以顶栏入口点进来照样能切到该分区。
+    //
+    // ⚠️ **只有顶栏上真的出现了这个按钮，才允许从设置里隐藏**。
+    // 保留左栏的版本（rc.3）压根不生成"设置类顶栏按钮"（那边程序化打不开设置），
+    // 若还按"已提升"隐藏，这个分区就既没有顶栏入口、也不在设置里——彻底没入口。
+    // 2026-10-27 用户报「dsh-chat-manager 的 webui 还是没有显示」就是这个：
+    // 它的「已归档会话」只有 settings.section 一个表面，被这条规则一起吃掉了。
     const promoted = (state.uiConfig && state.uiConfig.extra) || []
+    // 只认 **设置类** 顶栏按钮（`data-wb-kind="settings"`，点它会 openSettingsSection）：
+    // 同名面板按钮（比如 dshmarket 的「插件市场」面板）点进去是另一块内容，不算这个分区的入口。
+    const topbarLabels = new Set(Array.from(document.querySelectorAll('#wb-topbar button.wb-tab'))
+      .filter((b) => b.dataset.wbKind === 'settings')
+      .map((b) => (b.textContent || '').trim()))
+    state.settingsNavPlan = []
     for (const cell of allBySuffix('navCell', overlay)) {
       const text = (cell.textContent || '').replace(/\s+/g, ' ').trim()
-      const hide = !KEEP_NAV.includes(text) || promoted.includes(text)
+      const inTopbar = topbarLabels.has(text)
+      const hide = !KEEP_NAV.includes(text) || (promoted.includes(text) && inTopbar)
+      state.settingsNavPlan.push({ title: text, inTopbar, hide })
       cell.classList.toggle('wb-hidden', hide)
     }
     for (const actions of allBySuffix('actions', overlay)) {

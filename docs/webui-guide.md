@@ -131,7 +131,14 @@ python .\tools\wb.py install-plugin .\plugins\dsh-wb-demo
 | 原版左栏露出来 | 看 `sidebarVisibleRows`；`workbench.js` 的 `findSidebarChain()` 锚点是否拿到 |
 | 想彻底还原 | 删 `ui\workbench.css` + `ui\workbench.js`，或 `wb.py suspend` 停掉整套 |
 
-## 7. 两条别踩的机制（2026-10-27 加）
+## 7. 三条别踩的机制（2026-10-27 加）
+
+**③ 插件设置分区"提到顶栏"之后才允许从设置里隐藏。**
+判据必须是**顶栏上真有 `data-wb-kind="settings"` 的按钮**（点它会 `openSettingsSection`），
+不能只看标题在不在 `keepNav` 里、更不能把同名的**面板**按钮当入口（点面板是另一块内容）。
+反例（2026-10-27）：保留左栏的版本（rc.3）不生成设置类顶栏按钮，若还按"已提升"隐藏，
+分区就既没顶栏入口、也不在设置里 → 彻底没入口（用户报「dsh-chat-manager 的 webui 还是没有显示」）。
+排查字段：`boot-diag.json` 的 `settingsNavPlan`（每格 `{title, inTopbar, hide}`）。
 
 **① 左栏是"停到屏幕外"，不是 `display:none`。**
 设置入口（`[data-slot="sidebar.settings"]` / `settings.launcher`）长在左栏底部。左栏一旦
