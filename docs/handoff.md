@@ -26,6 +26,8 @@
 - **装插件的标准姿势**（2026-10-27 起）：`seeds\plugin-template\` 是现成模板，复制改名 → `wb.py plugins add <绝对路径>` → `wb.py restart`，顶栏自动出现新面板。**`plugins add` 必须传绝对路径**：profile 里写的是 `link:<路径>`，而 link 是相对 profile 目录解析的，传相对路径会装成一个不存在的目录（install 直接失败）。详见 `seeds\plugin-template\README.md`。
 - **插件备注**（2026-10-27 新增）：顶栏「插件」面板里每个插件下面有一条备注，点一下就地编辑（`Ctrl+Enter` 保存 / `Esc` 取消 / 清空即删除），过滤框也能按备注内容搜。存 `state\plugin-notes.json`（UTF-8，先写 .tmp 再 rename），接口 `GET/POST /wb-api/notes`；该文件**已加进 `wb.py backup` 的 state 白名单**（`BACKUP_STATE_FILES`），别让它在快照里漏掉。
 - **面板数据来源**（2026-10-27 修）：`/wb-api/live` 里**服务是实时枚举的**（走 `ctx.reflect.store` 的 Symbol 键，用属性描述符数方法，**绝不 `get` 服务对象**以免触发初始化），槽位是客户端概念、宿主拿不到，只能给 `api-live.json` 的快照并附 `slotsCollectedAt`；`/wb-api/build`（profile 分层）靠面板上的**「刷新基线」按钮**触发 `POST /wb-api/refresh` → 宿主 spawn `dsh --profile bench --dump-config` → 解析后重写 `api-build.json`。面板底部会把每条数据的来源和采集时间标出来，别再拿旧快照当实时数据。
+- **第三方插件实验（2026-10-27，第一个真实案例 `dshmarket` 1.70.2）**：`wb.py plugins add dshmarket`（需要 `npm_config_registry=https://mirrors.cloud.tencent.com/npm/`）→ 装进 bench profile → restart → 能跑。它注册的是**设置里的一个分区**（`settings.section`，「插件市场」），不是主面板；点它自己的「侧栏显示」后，会多一条 `sidebar.panellist` 入口，**顶栏靠动态发现自动接上**（实测 5 个按钮：Harness会话 / 插件 / 插件市场 / 状态 / 设置）。踩到两个坑见下方验证段。
+- **设置页导航列必须保留**（2026-10-27 修）：早先为了「只留语言/外观/字号」把 `.ZCYAFq_nav` 整列 `display:none`，结果**任何插件加的设置分区都点不到**。现在只隐藏 `.ZCYAFq_navTitle`/`.ZCYAFq_actions` 并压窄导航列，分区过滤交给 `KEEP_NAV` 白名单——**第三方插件加了设置分区，要把它的标题加进 `KEEP_NAV`**（已加「插件市场」）。
 - **面板深链接**：地址栏 `#wb-panel=插件` 可直接打开指定面板（`ui\workbench.js` 的 `WANT_PANEL`）。必须用 **hash**——token 用完会重定向到 `/`，query 会被剥掉。
 - **会话面板**：290px 左栏；首部三行（标题/实时状态/过滤+排序）；**按工作区分组**（默认排序=按工作区）：分组键是 `cwd`，组头显示工作区名——名字来自宿主新增接口 `/wb-sessions/workspaces`（只读主驾 `storages\workspace.json`，`default-workspace` 按原版规则显示成「默认工作区」），取不到才退回目录末段；可折叠、组头加粗+胶囊计数+分隔线；行缩进 20px、运行中圆点发光；**行标题来自桥透出的 `summary.projections.values.title`**（`/wb-sessions/list` 已带 `title`）。⚠️ 曾经分组键误用 `sessionLabel()`（优先标题），导致每条会话自成一组、组头全是标题——已修，回归测试 `tools\test-sessions-group.mjs`。
 - **设置页**：只留 语言 / 外观 / 字号大小；其余按标题文字隐藏（`pruneSettings()`，正则 `[\w-]+_(row|group|setting)`，别按 `[data-slot]` 判断——它包住整个区域）。
@@ -35,6 +37,7 @@
 > git：本仓库**没有配全局身份**，直接 `git commit` 会报 `Author identity unknown`；用 `git -c user.name=meow -c user.email=meow@local commit -m "…"`，提交后 `git status --short` 必须为空。
 > 重启会换 token：`wb.py restart` 之后，已经开着的页面 cookie 失效（主区全白）。**必须**把页面导航到 `wb.py url` 打出的新地址（`Ctrl+L` 输入后可能要按两次 Enter，第一次会被地址栏下拉建议吃掉）。
 > 动浏览器之前**每次都要重新确认标签**：标题里的「和另外 N 个页面」就是标签数，活动标签不一定还是上次那个。2026-10-27 我沿用昨晚「只有一个标签」的结论直接导航，把用户正开着的 dsh-market 页面顶掉了（已用 `Alt+←` 恢复）。正确做法：先 `Get-Process msedge → MainWindowTitle` + 截图看清标签，再决定按键。
+> `wb.py restart` 有**抢端口风险**：新进程可能在旧进程释放前 bind，日志出现 `listen EADDRINUSE … 127.0.0.1:59430` → 该实例 webserver 挂掉 → `startup failed: N required plugins did not activate`（12 个 pending）。**看到 startup failed 先别怪插件**：确认 59430 只有一个 owner（`Get-NetTCPConnection -LocalPort 59430`）+ 看 `home\logs\startup-*.log`，必要时 `wb.py stop` 等两秒再 `start`。
 
 ```powershell
 python E:\DSH-WORKBENCH\tools\wb.py status       # 端口/守护/版本
