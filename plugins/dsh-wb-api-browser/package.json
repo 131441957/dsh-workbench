@@ -46,6 +46,19 @@
           "description": "列出工作台所有插件声明的能力（按名调用用这个查）",
           "method": "GET",
           "route": "/wb-api/capabilities"
+        },
+        {
+          "name": "live",
+          "description": "宿主服务（实时枚举）+ 前端槽位（静态快照，带采集时间）+ 计数",
+          "method": "GET",
+          "route": "/wb-api/live"
+        },
+        {
+          "name": "refresh_build",
+          "description": "重算 profile 分层（跑一次 dsh --dump-config，约数秒）",
+          "method": "POST",
+          "route": "/wb-api/refresh",
+          "body": []
         }
       ]
     }

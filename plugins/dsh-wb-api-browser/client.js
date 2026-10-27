@@ -191,6 +191,15 @@ window.__ModuleLoader__.load({
       ]
     }
 
+    // 时间显示（面板上标数据来源用）
+    function fmtWhen(iso) {
+      if (!iso) return '?'
+      const d = new Date(iso)
+      if (Number.isNaN(d.getTime())) return '?'
+      const pad = (n) => String(n).padStart(2, '0')
+      return `${d.getMonth() + 1}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+    }
+
     function Panel(props) {
       const fixedTab = props && props.fixedTab
       const hideTabs = Boolean(props && props.hideTabs)
@@ -206,6 +215,44 @@ window.__ModuleLoader__.load({
       const [editing, setEditing] = useState('') // 正在编辑备注的行 id
       const [draft, setDraft] = useState('')
       const [noteErr, setNoteErr] = useState('')
+      const [refreshing, setRefreshing] = useState(false)
+
+      // 拉一次所有数据（首屏与「刷新基线」共用）
+      const loadAll = async () => {
+        const [l, b, s, p, n] = await Promise.all([
+          getJson('/wb-api/live').catch(() => null),
+          getJson('/wb-api/build').catch(() => null),
+          getJson('/wb-api/status').catch(() => null),
+          getJson('/wb-api/plugins').catch(() => null),
+          getJson('/wb-api/notes').then((r) => (r && r.notes) || {}).catch(() => ({})),
+        ])
+        setLive(l)
+        setBuild(b)
+        setStatus(s)
+        setPlugins(p)
+        setNotes(n || {})
+        if (!l && !b && !s) setError('工作台还没有基线数据：点「刷新基线」重算')
+      }
+
+      // 「刷新基线」：重算 profile 分层（跑 dsh --dump-config），服务本来每次都是实时的
+      const refreshBaseline = async () => {
+        setRefreshing(true)
+        setError('')
+        try {
+          const res = await fetch('/wb-api/refresh', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: '{}',
+          })
+          const body = await res.json().catch(() => ({}))
+          if (!res.ok || body.ok === false) throw new Error(body.error || `HTTP ${res.status}`)
+          await loadAll()
+        } catch (e) {
+          setError('刷新失败：' + String(e && e.message ? e.message : e))
+        } finally {
+          setRefreshing(false)
+        }
+      }
 
       useEffect(() => {
         // 允许外部（顶栏）切到指定标签页：window.__wbApiSelect('plugins')
@@ -223,26 +270,8 @@ window.__ModuleLoader__.load({
 
       useEffect(() => {
         let alive = true
-        ;(async () => {
-          try {
-            const [l, b, s, p, n] = await Promise.all([
-              getJson('/wb-api/live').catch(() => null),
-              getJson('/wb-api/build').catch(() => null),
-              getJson('/wb-api/status').catch(() => null),
-              getJson('/wb-api/plugins').catch(() => null),
-              getJson('/wb-api/notes').then((r) => (r && r.notes) || {}).catch(() => ({})),
-            ])
-            if (!alive) return
-            setLive(l)
-            setBuild(b)
-            setStatus(s)
-            setPlugins(p)
-            setNotes(n || {})
-            if (!l && !b && !s) setError('工作台还没有基线数据：先跑 wb.py api')
-          } catch (e) {
-            if (alive) setError(String(e && e.message ? e.message : e))
-          }
-        })()
+        loadAll()
+          .catch((e) => { if (alive) setError(String(e && e.message ? e.message : e)) })
         return () => {
           alive = false
         }
@@ -303,6 +332,17 @@ window.__ModuleLoader__.load({
                   t.label,
                 ),
               ),
+          h(
+            'button',
+            {
+              type: 'button',
+              style: styles.chip,
+              disabled: refreshing,
+              title: '重算 profile 分层（跑一次 dsh --dump-config）；服务列表本来就是实时的',
+              onClick: refreshBaseline,
+            },
+            refreshing ? '刷新中…' : '刷新基线',
+          ),
           h('input', {
             style: styles.search,
             placeholder: '过滤…',
@@ -403,7 +443,10 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { style: styles.dim },
-            `插件 ${counts.plugins} · 服务 ${counts.services} · 槽位 ${counts.slots} · profile 行 ${counts.build}`,
+            `插件 ${counts.plugins}`
+              + ` · 服务 ${counts.services}${live ? (live.servicesSource === 'live' ? '（实时）' : '（快照）') : ''}`
+              + ` · 槽位 ${counts.slots}${live && live.slotsCollectedAt ? `（快照 ${fmtWhen(live.slotsCollectedAt)}）` : ''}`
+              + ` · profile 行 ${counts.build}${build && build.generatedAt ? `（${fmtWhen(build.generatedAt)}）` : ''}`,
           ),
         ),
       )

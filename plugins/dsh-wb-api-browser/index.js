@@ -1,6 +1,7 @@
 // dsh-wb-api-browser — host half.
 // 做两件事：①把工作台 state/ 里采集好的接口基线用 HTTP 暴露出来；②读写"插件备注"。
-import { readFile, writeFile, rename, mkdir, readdir } from 'node:fs/promises'
+import { readFile, writeFile, rename, mkdir, readdir, stat } from 'node:fs/promises'
+import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 
 export const inject = ['webServer']
@@ -132,6 +133,141 @@ async function collectCapabilities() {
   return { capabilities, count: capabilities.length, skipped, scannedAt: new Date().toISOString() }
 }
 
+// ── 实时服务列表：从反射层取，绝不触发 getter（避免实例化副作用）────────
+// 结构（实测）：ctx.reflect.store 是 { Symbol(serviceName): { name, value, fiber, check } }
+function serviceList(ctx) {
+  const reflect = ctx.reflect || (ctx.root && ctx.root.reflect)
+  const store = reflect && reflect.store
+  if (!store || typeof store !== 'object') return null
+  const out = []
+  for (const sym of Object.getOwnPropertySymbols(store)) {
+    const impl = store[sym]
+    if (!impl) continue
+    const key = String(sym).replace(/^Symbol\((.*)\)$/, '$1')
+    if (!key || key === 'Symbol()') continue
+    const methods = new Set()
+    const collect = (target) => {
+      if (!target || (typeof target !== 'object' && typeof target !== 'function')) return
+      for (const name of Object.getOwnPropertyNames(target)) {
+        if (name === 'constructor') continue
+        const desc = Object.getOwnPropertyDescriptor(target, name)
+        if (desc && typeof desc.value === 'function') methods.add(name)
+      }
+    }
+    const value = impl.value
+    collect(value)
+    if (value && (typeof value === 'object' || typeof value === 'function')) {
+      const proto = Object.getPrototypeOf(value)
+      if (proto && proto !== Object.prototype) collect(proto)
+    }
+    out.push({ key, description: typeof impl.description === 'string' ? impl.description : '', methodCount: methods.size })
+  }
+  out.sort((a, b) => a.key.localeCompare(b.key))
+  return out
+}
+
+// ── profile 分层：跑一次 dsh --dump-config 重算（只在点「刷新」时执行）──────
+function cliPath() {
+  const root = process.env.DSH_WORKBENCH_ROOT || 'E:\\DSH-WORKBENCH'
+  return join(root, 'app', 'resources', 'runtime', 'cli', 'bin', 'dsh.cmd')
+}
+
+function parseDumpConfig(stdout) {
+  let layer = '?'
+  const rows = Object.create(null)
+  const order = []
+  const ensure = (name) => {
+    if (!rows[name]) {
+      rows[name] = []
+      order.push(name)
+    }
+  }
+  for (const rawLine of String(stdout).split(/\r?\n/)) {
+    const line = rawLine.trim()
+    const m = /^#\s*==\s*(.+?)(?:,\s*patched by .*)?$/.exec(line)
+    if (m) {
+      layer = m[1].trim()
+      ensure(layer)
+      continue
+    }
+    const idm = /^-\s*id:\s*(\S+)/.exec(line)
+    if (idm) {
+      ensure(layer)
+      rows[layer].push({ id: idm[1], name: '', disabled: false })
+      continue
+    }
+    const namem = /^name:\s*'?([^']+)'?$/.exec(line)
+    if (namem && rows[layer] && rows[layer].length) {
+      rows[layer][rows[layer].length - 1].name = namem[1].trim()
+      continue
+    }
+    if (line.startsWith('disabled:') && rows[layer] && rows[layer].length) {
+      rows[layer][rows[layer].length - 1].disabled = line.toLowerCase().includes('true')
+    }
+  }
+  const layers = order.map((name) => ({ layer: name, rows: rows[name] }))
+  return {
+    generatedAt: new Date().toISOString(),
+    layers,
+    totals: {
+      layers: layers.length,
+      rows: layers.reduce((sum, l) => sum + l.rows.length, 0),
+      disabled: layers.reduce((sum, l) => sum + l.rows.filter((r) => r.disabled).length, 0),
+    },
+  }
+}
+
+// ── 面板用的合并快照：服务走实时枚举，槽位只能给静态快照（并标出采集时间）──
+async function liveSnapshot(ctx) {
+  const [snap, fileStat] = await Promise.all([
+    readJson('api-live.json'),
+    stat(join(stateDir(), 'api-live.json')).catch(() => null),
+  ])
+  const liveServices = serviceList(ctx)
+  const services = liveServices || (snap && snap.services) || []
+  const slots = (snap && snap.slots) || []
+  const mtime = fileStat && fileStat.mtime ? fileStat.mtime.toISOString() : null
+  return {
+    collectedAt: new Date().toISOString(),
+    version: (snap && snap.version) || 'unknown',
+    services,
+    servicesSource: liveServices ? 'live' : 'snapshot',
+    servicesCollectedAt: liveServices ? new Date().toISOString() : mtime,
+    slots,
+    slotsSource: slots.length ? 'snapshot' : 'none',
+    slotsCollectedAt: mtime,
+    counts: { services: services.length, slots: slots.length },
+  }
+}
+
+async function refreshBuild() {
+  const cli = cliPath()
+  const root = process.env.DSH_WORKBENCH_ROOT || 'E:\\DSH-WORKBENCH'
+  const home = process.env.DSH_HOME || join(root, 'home')
+  const profile = process.env.DSH_PROFILE || 'bench'
+  const stdout = await new Promise((resolve, reject) => {
+    const child = spawn(process.env.ComSpec || 'cmd.exe', ['/c', cli, '--profile', profile, '--dump-config'], {
+      env: { ...process.env, DSH_HOME: home, DSH_PROFILE: profile },
+      windowsHide: true,
+    })
+    let out = ''
+    let err = ''
+    child.stdout.on('data', (chunk) => { out += chunk })
+    child.stderr.on('data', (chunk) => { err += chunk })
+    child.on('error', reject)
+    child.on('close', (code) => {
+      if (code === 0) resolve(out)
+      else reject(new Error(`dump-config 退出码 ${code}：${String(err).slice(0, 400)}`))
+    })
+    setTimeout(() => { try { child.kill() } catch { /* 已退出 */ } }, 120000)
+  })
+  const build = parseDumpConfig(stdout)
+  build.workbenchProfile = profile
+  await mkdir(stateDir(), { recursive: true })
+  await writeFile(join(stateDir(), 'api-build.json'), JSON.stringify(build, null, 2) + '\n', 'utf8')
+  return build
+}
+
 function sendJson(res, status, body) {
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
@@ -197,8 +333,23 @@ export function apply(ctx) {
       sendJson(res, 200, { ok: true, notes: await readNotes(), file: notesFile() })
       return
     }
+    // 服务实时枚举 + 槽位静态快照（各自带来源与采集时间）
+    if (url.pathname === `${PREFIX}/live`) {
+      sendJson(res, 200, await liveSnapshot(ctx))
+      return
+    }
+    // 重算 profile 分层（跑一次 dsh --dump-config）
+    if (url.pathname === `${PREFIX}/refresh`) {
+      if (req.method !== 'POST') { sendJson(res, 405, { ok: false, error: 'POST only' }); return }
+      try {
+        const build = await refreshBuild()
+        sendJson(res, 200, { ok: true, generatedAt: build.generatedAt, totals: build.totals })
+      } catch (error) {
+        sendJson(res, 500, { ok: false, error: String(error && error.message ? error.message : error) })
+      }
+      return
+    }
     const routes = {
-      [`${PREFIX}/live`]: 'api-live.json',
       [`${PREFIX}/build`]: 'api-build.json',
       [`${PREFIX}/status`]: 'main-status.json',
     }
