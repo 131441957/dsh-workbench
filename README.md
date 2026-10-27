@@ -16,7 +16,7 @@
 | `plugins/dsh-wb-sessions` | 主驾会话查看器（列表 / 历史 / 发送 / 按工作区分组 / SSE 实时状态） |
 | `plugins/dsh-wb-api-browser` | 状态面板：宿主服务（实时枚举）/ 前端槽位 / profile 分层 / 主驾状态 + 插件台账与能力清单 |
 | `plugins/dsh-workbench-bridge` | 主驾侧接入层（**软依赖**）：`/wb-bridge/*` 路由 + `workbench_status/api/plugins/call` 工具 |
-| `ui/` | 工作台界面改造的全部内容（`workbench.css` / `workbench.js` / 说明见 `ui/README.md`） |
+| `ui/` | 工作台界面改造的全部内容（`workbench.css` 带逐段注释，`workbench.js` 是顶栏/遮罩/设置裁剪）｜**改界面先读 [docs/webui-guide.md](docs/webui-guide.md)** |
 | `seeds/` | 新建 profile 用的模板（`${WB_ROOT}` 占位，安装时渲染） |
 | `docs/` | 交接、接口基线、升级策略、插件问题台账 |
 

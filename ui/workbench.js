@@ -59,6 +59,24 @@
             return r.width > 0 && r.height > 0 && el.offsetParent !== null
           })
           .length,
+        // 我们 CSS 里写的选择器在当前版本里是否存在（类名前缀由运行时生成，换版本可能变）
+        shellClasses: (() => {
+          const out = {}
+          const probe = (key, needle) => {
+            const el = document.querySelector(`[class*="${needle}"]`)
+            out[key] = el ? String(el.className || '').split(/\s+/).find((c) => c.includes(needle)) || '' : ''
+          }
+          probe('frame', '_frame')
+          probe('sidebarCol', '_sidebarCol')
+          probe('centerCol', '_centerCol')
+          probe('panelRow', '_panelRow')
+          out.cssFrameApplied = (() => {
+            const el = document.querySelector('[class*="_frame"]')
+            if (!el) return 'no-frame'
+            return getComputedStyle(el).display
+          })()
+          return out
+        })(),
         defaulted: Boolean(document.getElementById('wb-topbar')) && state.activeMarked ? true : false,
         buttons,
         topbarTabs: Array.from(document.querySelectorAll('#wb-topbar button.wb-tab')).map((b) => b.textContent),

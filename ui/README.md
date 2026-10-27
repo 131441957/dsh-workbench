@@ -1,5 +1,8 @@
 # 工作台界面改造说明（和 harness 改 webui 同一套机制）
 
+> 详细版在 **[docs\webui-guide.md](../docs/webui-guide.md)**（含类名会变、怎么验证改动生效、常见配方）。
+> 本文件只留最短版本。
+
 工作台的界面不是 fork 源码，而是在**运行时注入**：
 
 ```
@@ -16,9 +19,11 @@
 ## 你可以改什么
 
 `ui\workbench.css`
-- 布局（`.OSewFq_frame` 强制 flex、隐藏 sidebar/rightbar、centerCol 撑满）
+- 布局（`[class*="_frame"]` 强制 flex、侧栏/空右栏不占位、中列撑满）
 - 主题细节、水印（`body::after`，端口用 `var(--wb-port)`）
-- ⚠️ 不要把 `.ZCYAFq_nav` 整列 `display:none`：插件的设置分区会全部不可达（踩过）
+- ⚠️ 选择器要用**后缀匹配**（`[class*="_frame"]`），别写死前缀：类名前缀每个版本都会变
+  （alpha.1 = `OSewFq_`，rc.3 = `mP3x-q_`），写死会静默失效
+- ⚠️ 不要把设置页导航列整列 `display:none`：插件的设置分区会全部不可达（踩过）
 
 `ui\workbench.js`
 - 顶栏：面板清单是**动态发现的**（扫侧栏 `*_panelRow`），`LEFT_ORDER` / `RIGHT_ORDER` 只决定顺序与左右；新插件不用改代码

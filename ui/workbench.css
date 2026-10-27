@@ -1,64 +1,96 @@
-/* ────────────────────────────────────────────────────────────────
- * 工作台 UI 注入样式（改完刷新页面即生效；删掉本文件即完全恢复原样）
+/* ══════════════════════════════════════════════════════════════════════════
+ * 工作台 UI 注入样式（ui\workbench.css）
+ * --------------------------------------------------------------------------
+ * 这份文件由 plugins\dsh-wb-ui 在服务端注入到首页 </head> 前，改完**刷新页面**即生效。
+ * 删掉本文件（或停用 dsh-wb-ui）→ 界面立刻恢复原版，不动安装目录里任何文件。
  *
- * 布局改造（纯 CSS，不移动任何 DOM 节点）：
- *   原结构：.OSewFq_frame = [ sidebarCol 280 | centerCol | rightbarCol 948(空) ]
- *   问题：侧栏藏掉后 centerCol 只剩 280px，空的 rightbarCol 却占 948px
- *   做法：侧栏不再占位、空右列不占位、中列 flex:1 撑满 —— 导航由顶部条承担
- * ──────────────────────────────────────────────────────────────── */
+ * ── 为什么要写成 [class*="_frame"] 这种样子 ────────────────────────────────
+ * DSH 前端用的是 CSS-in-JS，类名形如 `OSewFq_frame` / `mP3x-q_frame`：
+ *   · 后缀（_frame / _sidebarCol / _centerCol …）是稳定的语义名
+ *   · 前缀（OSewFq / mP3x-q …）是**每个版本重新生成的 hash**
+ * 2026-10-27 实测：0.2.1-alpha.1 是 `OSewFq_`，0.2.1-rc.3 变成 `mP3x-q_`。
+ * 所以**绝不能写死前缀**，否则换个版本整份布局都不生效（rc.3 上就因此显示成 grid 布局）。
+ * 正确写法：`[class*="_frame"]`（属性子串匹配）。
+ *
+ * ── 怎么确认生效 ─────────────────────────────────────────────────────────
+ * 打开页面后看 `state\boot-diag.json` 里的 `shellClasses`：
+ *   { "frame": "mP3x-q_frame", …, "cssFrameApplied": "flex" }   ← flex 才算命中
+ * 或者控制台跑 `__wbSweep()` 重扫一遍，再用 `__WB_UI__` 看状态。
+ * ══════════════════════════════════════════════════════════════════════════ */
 
-/* ① 原侧栏 / 空右列不占位 */
-.OSewFq_sidebarCol,
-.OSewFq_rightbarCol {
+/* ──────────────────────────────────────────────────────────────────────────
+ * 一、布局骨架
+ * 原版结构（DSH 桌面壳）：
+ *   <div class="*_frame">                     ← 可能是 grid，三列固定宽
+ *     <div class="*_sidebarCol"> 280px  原侧栏（导航行都在这里）
+ *     <div class="*_centerCol">  …      真正放面板/对话的那列
+ *     <div class="*_rightbarCol"> 948px 空的右栏
+ *   </div>
+ * 工作台的思路：**导航改由顶部条承担**，所以侧栏与空右栏都不占位，中列吃满。
+ * 注意：这里只是让它们"不占位"，真正把原版导航行藏掉的是 workbench.js
+ *       （它按 `*_panelRow` 动态发现，跨版本都有效）。
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/* 1.1 原侧栏 / 空右列不占位 */
+[class*="_sidebarCol"],
+[class*="_rightbarCol"] {
   display: none !important;
 }
 
-/* ② frame 原本可能是 grid（固定列宽 280px），强制改成 flex，让中列吃满 */
-.OSewFq_frame {
+/* 1.2 frame 可能是 grid（固定列宽 280px），强制 flex 让中列能伸展 */
+[class*="_frame"] {
   display: flex !important;
   flex-direction: row !important;
 }
 
-/* ③ 中列（真正放面板的那列）撑满 */
-.OSewFq_centerCol {
+/* 1.3 中列撑满（能改的常见参数：想让内容窄一点，把 flex-basis 改小、或加 max-width） */
+[class*="_centerCol"] {
   flex: 1 1 auto !important;
   width: auto !important;
   max-width: none !important;
   min-width: 0 !important;
 }
 
-/* ④ 列宽拖拽手柄没意义了 */
-.OSewFq_handle {
+/* 1.4 列宽拖拽手柄没意义了 */
+[class*="_handle"] {
   display: none !important;
 }
 
-/* ⑤ 底部行/覆盖层保持正常 */
-.OSewFq_bottomRow {
+/* 1.5 底部行（输入框/状态行之类）保持自身高度，不参与伸展 */
+[class*="_bottomRow"] {
   flex: 0 0 auto !important;
 }
 
-/* ⑥ 设置页：字段级由 workbench.js 按标题裁剪；导航列**保留**（只压缩宽度），
-   分区白名单走 KEEP_NAV —— 插件在设置里加的分区要靠它才能点进去
-   （dshmarket 的「插件市场」曾因此完全不可达）。
-   ⚠️ 不要把 .ZCYAFq_nav 整列 display:none：那样所有插件的设置分区都会消失。
-   ⚠️ 也不要给 .ZCYAFq_panel 加 left/transform 居中——它不是绝对定位，
-      transform 会把整块面板平移到屏幕外，表现就是"设置里什么都看不到"。 */
-.ZCYAFq_navTitle,
-.ZCYAFq_actions {
+/* ──────────────────────────────────────────────────────────────────────────
+ * 二、设置页
+ * 字段级裁剪由 workbench.js 的 pruneSettings() 按「叶子标题文字」做
+ * （白名单来自 state\ui-config.json，由 wb.py install-plugin 写入 keepNav）。
+ * 这里只做两件纯视觉的事：收掉标题与右上动作、把导航列压窄。
+ *
+ * ⚠️ 绝对不要把导航列整列 display:none —— 插件在设置里加的分区会全部点不进去
+ *    （dshmarket 的「插件市场」就这么丢过一轮）。
+ * ⚠️ 也不要给设置面板加 left/transform 之类做"居中"：它不是绝对定位元素，
+ *    transform 会把整块面板平移到屏幕外，表现就是"设置里什么都看不到"。
+ * ────────────────────────────────────────────────────────────────────────── */
+[class*="_navTitle"],
+[class*="_actions"] {
   display: none !important;
 }
 
-.ZCYAFq_nav {
+/* 2.1 导航列只压窄、不隐藏。想更窄改 min/max-width；想恢复原宽删掉这一条 */
+[class*="_nav"]:not([class*="_navTitle"]):not([class*="_navbar"]) {
   flex: 0 0 auto !important;
   min-width: 110px !important;
   max-width: 150px !important;
 }
 
-/* ────────────────────────────────────────────────────────────────
- * 以下为示例样式，可自行增删
- * ──────────────────────────────────────────────────────────────── */
+/* ──────────────────────────────────────────────────────────────────────────
+ * 三、可自由发挥的地方（下面都是"示例"，删掉不影响工作台功能）
+ * ────────────────────────────────────────────────────────────────────────── */
 
-/* 右下角水印，用来确认注入生效（端口由 workbench.js 从 /wb-ui/config 读出来写进 --wb-port） */
+/* 3.1 右下角水印：用来肉眼确认注入层生效。
+ *     端口由 workbench.js 从 /wb-ui/config 读出后写入 CSS 变量 --wb-port。
+ *     想换位置改 right/bottom；不想要就整块删掉。 */
 body::after {
   content: "工作台 " var(--wb-port, "59430");
   position: fixed;
@@ -72,6 +104,22 @@ body::after {
   letter-spacing: 0.5px;
 }
 
+/* 3.2 字体渲染微调（想换成别的字体就在这里加 font-family） */
 body {
   -webkit-font-smoothing: antialiased;
 }
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * 四、想继续改？常见配方
+ *
+ * ① 改主题色/间距：DSH 用 CSS 变量（--dsw-*），直接覆盖即可，例如
+ *      :root { --dsw-alias-label-secondary: #666; }
+ *    变量名可在控制台里对某个元素执行 getComputedStyle(el) 逐个看。
+ * ② 隐藏某一块界面：别按类名藏（会跨版本失效），用文字规则 ——
+ *    在 workbench.js 的 HIDE_TEXTS 里加标题文字，并确保只对**叶子标题**判断。
+ * ③ 加一个顶栏入口：不要改这里，写插件（seeds\plugin-template），
+ *    注册 sidebar.panellist + main 两处槽位，顶栏会动态发现它。
+ * ④ 改面板宽度/留白：改 1.3 的 centerCol 规则，或给面板根节点（data-wb-panel）加样式。
+ * ⑤ 换一套导航（侧栏/命令面板）：改 workbench.js 的 buildTopbar/placeTopbar 与扫描逻辑，
+ *    CSS 这边把 1.1 的两条删掉即可恢复原侧栏。
+ * ────────────────────────────────────────────────────────────────────────── */
