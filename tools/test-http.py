@@ -24,6 +24,13 @@ ROOT = Path(args.root)
 sys.path.insert(0, str(ROOT / "tools"))
 import wb  # noqa: E402
 
+# ⚠️ 端口必须**现读**：wb.py 的 wb.WB_PORT 是模块常量（默认 59430），不调 load_port()
+# 就永远指向主套 —— 2026-10-27 踩过：`--root E:\WB-RC3` 实际打的是 59430，
+# 结果"床 11/11 通过"是假的（返回的 uiDir 是主套的）。这里强制解析并打印，
+# 后面那条「/wb-ui 认领自己」还会断言 uiDir == 本根的 ui/，双保险。
+wb.WB_PORT = wb.load_port()
+print(f"目标实例   : {wb.WB_ROOT}  port={wb.WB_PORT}")
+
 results: list[tuple[bool, str, str]] = []
 
 
@@ -41,7 +48,14 @@ def jget(path: str, port: int | None = None):
 
 
 # ── 工作台自身 ──────────────────────────────────────────────────
-check("/wb-ui 认领自己", lambda: "uiDir=" + str(jget("/wb-ui").get("uiDir")))
+# 「认领自己」不只是打印：uiDir 必须等于**本根**的 ui/，否则说明端口上跑的是另一套工作台
+# （多套共存时最容易发生，`--root` 指错/端口读错都会这样）。对不上直接抛，判定为失败。
+def claim_self():
+    ui = str(jget("/wb-ui").get("uiDir") or "")
+    if Path(ui).resolve() != (ROOT / "ui").resolve():
+        raise AssertionError(f"端口 {wb.WB_PORT} 上是另一套工作台：uiDir={ui}，本根应为 {ROOT / 'ui'}")
+    return "uiDir=" + ui
+check("/wb-ui 认领自己", claim_self)
 check("/wb-api/health", lambda: f"ok={jget('/wb-api/health').get('ok')}")
 check("/wb-api/plugins", lambda: "插件 " + ",".join(p["name"] for p in jget("/wb-api/plugins")["plugins"]))
 check("/wb-api/live", lambda: f"服务 {len(jget('/wb-api/live').get('services') or [])} 个")

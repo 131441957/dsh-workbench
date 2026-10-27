@@ -568,21 +568,41 @@ def bench_profile_json() -> Path:
 
 
 def npm_latest_version(pkg: str) -> str:
-    """查 npm 上的最新版本（先官方源，失败再腾讯镜像）。"""
-    npm = Path(r"E:\nodejs\npm.cmd")
-    if not npm.exists():
+    """查 npm 上的最新版本。
+
+    2026-10-27 改（实测装 dsh-pet 花了 237 秒，其中大半耗在这里）：
+      ① **先镜像后官方**：这台机器和客户机都在国内，官方源往往要 120 秒才超时；反过来试。
+         用户定的国内镜像：腾讯 mirrors.cloud.tencent.com/npm。
+      ② **每次只给 25 秒**，并 `--fetch-retries=0 --fetch-timeout=20000`：npm 自己默认还要重试
+         2 次、每次最长 60 秒，光"查个版本号"就能拖成四分钟。查不到就退注册表缓存/latest。
+      ③ npm 路径别写死 E:\\nodejs —— 跟着 node 走（_find_node 的邻居），找不到就走 PATH。
+    最坏情况从 ~240 秒降到 ~50 秒；正常（镜像通）1~3 秒。
+    """
+    npm = _find_npm()
+    if not npm:
         return ""
-    for reg in ("https://registry.npmjs.org/", "https://mirrors.cloud.tencent.com/npm/"):
+    for reg in ("https://mirrors.cloud.tencent.com/npm/", "https://registry.npmjs.org/"):
         try:
-            out = subprocess.run(["cmd", "/c", f'"{npm}"', "view", pkg, "version", "--registry", reg],
-                                 capture_output=True, text=True, timeout=120, creationflags=RUNFLAGS,
-                                 encoding="utf-8", errors="replace").stdout.strip()
+            out = subprocess.run(
+                ["cmd", "/c", f'"{npm}"', "view", pkg, "version",
+                 "--registry", reg, "--fetch-retries=0", "--fetch-timeout=20000", "--no-audit", "--no-fund"],
+                capture_output=True, text=True, timeout=25, creationflags=RUNFLAGS,
+                encoding="utf-8", errors="replace").stdout.strip()
             last = [ln.strip() for ln in out.splitlines() if ln.strip()]
             if last and re.match(r"^\d+\.\d+\.\d+", last[-1]):
                 return last[-1]
         except Exception:
             continue
     return ""
+
+
+def _find_npm() -> Path | None:
+    """npm 跟 node 装在一起；找不到 node 就退回 PATH。都找不到返回 None（只有查版本才需要）。"""
+    cand = Path(NODE_EXE).parent / "npm.cmd"
+    if cand.exists():
+        return cand
+    found = shutil.which("npm")
+    return Path(found) if found else None
 
 
 def cmd_plugins(action: str = "list", spec: str = "", bundle: str = "") -> int:
