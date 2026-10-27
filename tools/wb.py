@@ -1600,7 +1600,7 @@ def cmd_pack(out: str = "", include_test: bool = False, force: bool = False) -> 
             for f in sorted(src.glob("*")):
                 if not f.is_file():
                     continue
-                if any(f.name.startswith(p) for p in ("handoff", "upgrade-policy", "meow-memory-", "dsh-issue-", "plugin-manager-gaps", "tools-plan", "publish-checklist", "sos-")):
+                if any(f.name.startswith(p) for p in ("handoff", "upgrade-policy", "meow-memory-", "dsh-issue-", "plugin-manager-gaps", "tools-plan", "publish-checklist", "sos-", "test-round-")):
                     continue
                 shutil.copy2(f, dest / "docs" / f.name)
             info(f"已复制 docs/（内部记录已排除）")
