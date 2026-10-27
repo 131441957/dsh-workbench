@@ -1931,6 +1931,82 @@ def cmd_plugin_update(name: str = "", apply: bool = False) -> int:
     return cmd_install_plugin(f"{pkg}@{new}", "", False)
 
 
+def _asar_markers(asar: Path, markers: dict[str, bytes]) -> dict[str, int]:
+    """在 app.asar 里数一下关键字符串出现次数（只读）。用来静态判断某个 harness 版本能不能挂工作台。"""
+    out: dict[str, int] = {k: 0 for k in markers}
+    try:
+        data = asar.read_bytes()
+        for key, needle in markers.items():
+            out[key] = data.count(needle)
+    except Exception as exc:  # noqa: BLE001
+        out["__error__"] = str(exc)  # type: ignore[assignment]
+    return out
+
+
+def cmd_preflight(install: str) -> int:
+    """体检：目标 harness 安装能不能挂这套工作台（静态检查，不复制、不启动）。"""
+    head("兼容体检（目标 harness）")
+    target = Path(install) if install else MAIN_INSTALL
+    if not valid_install(target):
+        bad(f"不是有效的 harness 安装目录：{target}")
+        return 1
+    rt = target / "resources" / "runtime" / "primary-runtime" / "runtime.json"
+    version = "?"
+    try:
+        version = json.loads(rt.read_text(encoding="utf-8-sig")).get("desktopVersion") or "?"
+    except Exception:
+        pass
+    asar = target / "resources" / "app.asar"
+    ok(f"安装目录 {target}")
+    ok(f"版本 {version}")
+    if not asar.exists():
+        bad("找不到 resources\\app.asar")
+        return 1
+
+    need = {
+        "服务 webServer": b"webServer",
+        "服务 sessionController": b"sessionController",
+        "服务 reflect": b"reflect",
+        "槽位 sidebar.panellist": b"sidebar.panellist",
+        "槽位 settings.section": b"settings.section",
+    }
+    clients = {
+        "插件管理器 dsh-client-ui-plugin-manager": b"dsh-client-ui-plugin-manager",
+        "设置-通用 dsh-client-ui-settings-general": b"dsh-client-ui-settings-general",
+        "自动化 dsh-client-ui-schedule": b"dsh-client-ui-schedule",
+        "入口自定义 dsh-client-ui-entry-customization": b"dsh-client-ui-entry-customization",
+    }
+    marks = _asar_markers(asar, {**need, **clients, "pluginNavigation": b"pluginNavigation"})
+    if "__error__" in marks:
+        bad(f"读 asar 失败：{marks['__error__']}")
+        return 1
+
+    hard_missing, soft_missing = [], []
+    for name in need:
+        hit = marks.get(name, 0) > 0
+        (ok if hit else warn)(f"{name}：{'有' if hit else '没找到'}")
+        if not hit:
+            (hard_missing if name in ("服务 webServer", "槽位 sidebar.panellist") else soft_missing).append(name)
+    for name in clients:
+        hit = marks.get(name, 0) > 0
+        info(f"{name}：{'有' if hit else '无'}")
+
+    head("结论")
+    if hard_missing:
+        bad(f"不兼容：缺少 {', '.join(hard_missing)}——这套插件（注入层/面板）挂不上去")
+        return 1
+    if soft_missing:
+        warn(f"可跑但要留意：{', '.join(soft_missing)} 没找到（相关功能会降级）")
+    if marks.get("pluginNavigation", 0) > 0 and marks.get("入口自定义 dsh-client-ui-entry-customization", 0) > 0:
+        warn("该版本里「入口自定义」依赖 pluginNavigation：补丁里**不要**禁用 ui-plugin-manager，"
+             "否则客户端整页报 Failed to load plugins（rc.3 上踩过）")
+    elif marks.get("pluginNavigation", 0) > 0:
+        info("该版本有 pluginNavigation，但没有「入口自定义」依赖它 → 禁用 ui-plugin-manager 也不会炸（alpha.1 就是这种）")
+    ok(f"这套工作台可以装在 {version} 上（静态检查通过；动态仍需跑一次 install 验证）")
+    info("下一步：wb.py paths --install <该目录> 然后 wb.py install")
+    return 0
+
+
 def current_url() -> str | None:
     """取最新的带 token 入口（token 每次重启都换）。"""
     log = LOG_DIR / "workbench.out.log"
@@ -3398,6 +3474,7 @@ def main(argv: list[str]) -> int:
         "restart-safe": lambda: cmd_restart_safe(),
         "start-safe": lambda: cmd_start_safe(),
         "registry": lambda: cmd_registry(args.force),
+        "preflight": lambda: cmd_preflight(args.install or ""),
         "plugin-search": lambda: cmd_plugin_search(
             (args.rest[0] if args.rest else (args.sub or "")), args.n),
         "plugin-update": lambda: cmd_plugin_update(
