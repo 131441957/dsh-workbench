@@ -58,13 +58,20 @@ python tools\wb.py start            # 启动工作台
 python tools\wb.py page             # 打开页面（带 token）
 ```
 
-装插件：
+## 装插件（这是工作台的主要用途）
 
 ```powershell
-python tools\wb.py plugin-info   <包名>     # 侦察：会露在哪、注册哪些槽位
-python tools\wb.py install-plugin <包名>    # 装 + 登记界面白名单 + 安全重启 + 验证（失败自动回滚）
-python tools\wb.py uninstall-plugin <包名>  # 卸干净（profile / node_modules / 白名单 / 台账）
+python tools\wb.py plugin-search 记忆          # ① 搜：读社区注册表，打印可直接安装的 npm 名
+python tools\wb.py plugin-info   <包名>        # ② 侦察：会露在哪、注册哪些槽位、peer 要求
+python tools\wb.py install-plugin <包名|目录>  # ③ 装：依赖 + 入口登记 + 安全重启 + 验证（失败自动回滚）
+python tools\wb.py uninstall-plugin <包名>     # 卸：profile / node_modules / 设置白名单 / 台账 全清
 ```
+
+- **装完顶栏自动多一个入口**，不需要改工作台任何代码（顶栏是动态发现侧栏入口的）
+- 自己写插件：复制 `seeds\plugin-template` → 改三处名字 → `install-plugin ./plugins/xxx`
+- 升级：`plugin-update`；界面没出现入口：`fix-ui`；装崩了：`start-safe`
+
+**[完整说明：docs/install-plugins.md](docs/install-plugins.md)**（含改哪三处、常见坑、装在哪）
 
 ## 设计要点
 

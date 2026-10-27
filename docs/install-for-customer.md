@@ -52,7 +52,7 @@ python tools\wb.py page               # 打开页面（带 token）
 - `attach` 不加 `--apply` 是预览：只打印将要对你的 profile 做的改动
 - 装完 **重启一次你的 harness**，接入层的工具才会出现（桥是宿主代码）
 
-## 2. 装完怎么确认成功
+## 4. 装完怎么确认成功
 
 ```powershell
 python tools\wb.py status      # 端口在听、看门狗运行中
@@ -61,7 +61,23 @@ python tools\wb.py doctor      # 逐项自检
 
 浏览器里应该看到：**标签页标题是「DSH 工作台」**，顶部有 `Harness会话 / 插件 / 状态 / 设置`。
 
-## 3. 日常操作（可视化安装器）
+## 5. 装完第一件正事：装插件
+
+工作台的价值就在这——**它是插件宿主，装插件不碰你的主 harness**。三条命令：
+
+```powershell
+python tools\wb.py plugin-search 记忆          # 搜（读社区注册表，输出可直接安装的 npm 名）
+python tools\wb.py plugin-info   <包名>        # 侦察：会露在哪、要什么版本
+python tools\wb.py install-plugin <包名|目录>  # 装：依赖+登记+安全重启+验证，失败自动回滚
+```
+
+装完**刷新页面，顶栏会自动多一个入口**（不用改任何代码）。
+
+自己写插件也只要三步：复制 `seeds\plugin-template` 改名 → 改三处名字（`package.json` / `cordis.patch.yml` / `client.js` 的 `id`）→ `install-plugin .\plugins\你的插件`。
+
+完整说明（含"为什么装完看不见"、卸干净、升级、回滚）见 **[install-plugins.md](install-plugins.md)**。
+
+## 6. 日常操作（可视化安装器）
 
 桌面「**DSH 工作台 安装器**」（或 `pythonw tools\wb_gui.py`）里有：
 
@@ -75,7 +91,7 @@ python tools\wb.py doctor      # 逐项自检
 
 顶部有一行 **构建信息**（版本 / `wb.py` 更新时间 / 根目录）——找我们排障时先把它截图发来。
 
-## 4. 常见问题
+## 7. 常见问题
 
 **Q1：端口 59430 被占用？**
 不用管：`install` / `start` 会自动往上找一个空闲端口，写进 `config.json`，并打印实际地址（例如 59431）。
@@ -129,13 +145,13 @@ python tools\wb.py suspend           # 停服务与自动伴随
 # 最后删掉整个工作台目录（它自带运行时副本，不在系统里留东西）
 ```
 
-## 5. 这套东西的边界
+## 8. 这套东西的边界
 
 - 工作台**不接 agent**：它是插件宿主，没有会话界面。因此**只挂在会话界面上的插件**（消息操作、输入框、悬浮层）装进去功能在、界面看不见——`install-plugin` 会提前告警。
 - 分发包**不含测试插件**（如插件市场），也不含运行时/日志/备份。
 - 主 harness 里只有接入层一个插件（软依赖）；它挂了也不会拖垮主 harness。
 
-## 6. 目录说明
+## 9. 目录说明
 
 | 路径 | 内容 |
 |---|---|
