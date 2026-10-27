@@ -1631,7 +1631,8 @@ def _dist_version() -> str:
 #       publish-checklist / sos- / test-round-）和**测试插件**（DIST_EXCLUDE_PLUGINS = dshmarket）。
 # 硬指标：MANIFEST.absolutePathHits 必须为 0（本机绝对路径会让客户机上跑不起来）。
 #   计数用单反斜杠字面量 `"E:" + chr(92) + "DSH-WORKBENCH"`——写成双反斜杠会数出 0（踩过）。
-def cmd_pack(out: str = "", include_test: bool = False, force: bool = False) -> int:
+def cmd_pack(out: str = "", include_test: bool = False, force: bool = False,
+             make_zip: bool = False) -> int:
     """打一个可分发目录：源码/插件/界面/文档/种子，不含运行时、状态、备份与本机配置。"""
     ver = _dist_version()
     dest = Path(out) if out else (WB_ROOT / "dist" / f"DSH-Workbench-{ver}")
@@ -1771,10 +1772,27 @@ python tools\\wb.py fix-ui                        # 从别处装的插件，跑�
     }
     (dest / "MANIFEST.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
+    # 许可协议要跟着包走（客户拿到的是一份 MIT 授权的软件）
+    lic = WB_ROOT / "LICENSE"
+    if lic.exists():
+        shutil.copy2(lic, dest / "LICENSE")
+
     ok(f"分发包就绪：{dest}")
     info(f"文件 {manifest['files']} 个，插件 {len(plugins)} 个，本机绝对路径残留 {hits} 处")
     if hits:
         warn("还有本机绝对路径，客户机上可能出问题（台账 DIST-02/03）")
+
+    # --zip：给 GitHub Release / 直接发给客户用（zip 放 dist\ 根，不进 git）
+    if make_zip:
+        import zipfile as _zip
+        zip_path = WB_ROOT / "dist" / f"DSH-Workbench-{ver}.zip"
+        if zip_path.exists():
+            zip_path.unlink()
+        with _zip.ZipFile(zip_path, "w", _zip.ZIP_DEFLATED) as zf:
+            for f in sorted(dest.rglob("*")):
+                if f.is_file():
+                    zf.write(f, f.relative_to(dest.parent))
+        ok(f"已打包 zip：{zip_path}（{zip_path.stat().st_size / 1048576:.1f} MB）")
     return 0
 
 
@@ -3748,6 +3766,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--include-test", dest="include_test", action="store_true")
     ap.add_argument("--json", dest="as_json", action="store_true")
     ap.add_argument("--refresh", dest="force", action="store_true")
+    ap.add_argument("--zip", dest="zip_out", action="store_true")
     # setup 专用开关
     ap.add_argument("--no-attach", dest="no_attach", action="store_true")
     ap.add_argument("--open", dest="open_page", action="store_true")
@@ -3783,7 +3802,7 @@ def main(argv: list[str]) -> int:
         "fix-ui": lambda: cmd_fix_ui(),
         "attach": lambda: cmd_attach(args.target_home, args.target_profile, args.apply, args.no_install),
         "detach": lambda: cmd_detach(args.target_home, args.target_profile, args.apply, args.no_install),
-        "pack": lambda: cmd_pack(args.out or "", args.include_test, args.force),
+        "pack": lambda: cmd_pack(args.out or "", args.include_test, args.force, args.zip_out),
         "prepublish": lambda: cmd_prepublish(),
         "url": lambda: cmd_url(),
         "open": lambda: cmd_open(),
