@@ -103,6 +103,20 @@ export function apply(ctx) {
       return
     }
 
+    // 界面裁剪的白名单：装插件时由 wb.py install-plugin 自动写入 state\ui-config.json
+    if (url.pathname === '/wb-ui/config') {
+      let cfg = {}
+      try {
+        cfg = JSON.parse(readFileSync(join(WB_ROOT, 'state', 'ui-config.json'), 'utf8'))
+      } catch {
+        cfg = {}
+      }
+      const keepNav = Array.isArray(cfg.keepNav) ? cfg.keepNav.filter((x) => typeof x === 'string') : []
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+      res.end(JSON.stringify({ ok: true, keepNav }))
+      return
+    }
+
     const body = {
       ok: true,
       uiDir: UI_DIR,

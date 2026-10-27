@@ -495,9 +495,22 @@
   // 找到标题文本 → 隐藏它最近的 _row / _group / _setting 容器。
   const KEEP_SETTINGS = ['语言', '外观', '字号大小']
   const REMOVE_SETTINGS = ['权限', '工作步骤展示', '显示代码工作视图', '显示代码工作图宽', '快捷键', '繁忙时的发送行为', '性能与用量']
-  // 设置页左侧导航只留这些。⚠️ 第三方插件如果在设置里加了自己的分区，标题必须加到这里，
-  // 否则会被我们自己的裁剪藏掉（dshmarket 的「插件市场」就是这样踩过的）。
-  const KEEP_NAV = ['通用设置', '插件市场']
+  // 设置页左侧导航只留这些。基础白名单写在这里；**第三方插件加的分区标题由
+  // wb.py install-plugin 自动写进 state\ui-config.json（/wb-ui/config 读回来）**，
+  // 所以装带设置分区的插件不再需要改这个文件。
+  const BASE_KEEP_NAV = ['通用设置']
+  const KEEP_NAV = BASE_KEEP_NAV.slice()
+  const loadUiConfig = async () => {
+    try {
+      const res = await fetch('/wb-ui/config', { headers: { accept: 'application/json' } })
+      const body = await res.json()
+      const extra = Array.isArray(body && body.keepNav) ? body.keepNav.filter((x) => typeof x === 'string' && x.trim()) : []
+      for (const title of extra) {
+        if (!KEEP_NAV.includes(title)) KEEP_NAV.push(title)
+      }
+      state.uiConfig = { extra, keepNav: KEEP_NAV.slice() }
+    } catch { /* 读不到就用基础白名单 */ }
+  }
 
   // 精确找“行容器”：类名必须以 _row/_group/_setting 结尾（不能用 *="_row"，
   // 那会匹配到 _rowText / _rowTitle 这类文字容器，结果是把文字藏了、行还留着）
@@ -590,6 +603,7 @@
 
   const boot = () => {
     attachStyle()
+    loadUiConfig() // 先读裁剪白名单（异步，不阻塞）；读了之后 sweep 里的裁剪就用新列表
     dismiss()
     sweep() // 第一轮：先只处理 toast / 弹窗，不动布局
     observe()

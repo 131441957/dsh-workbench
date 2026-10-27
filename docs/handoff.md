@@ -33,7 +33,20 @@
 - **设置页**：只留 语言 / 外观 / 字号大小；其余按标题文字隐藏（`pruneSettings()`，正则 `[\w-]+_(row|group|setting)`，别按 `[data-slot]` 判断——它包住整个区域）。
 - **备份**：`wb.py backup --note "…"` → `backups\snapshot-<时间>.zip`（含 tools/plugins/seeds/docs/ui + config.json + home/profiles/bench + home/storages/*.json；**不收** credentials/app/state/logs）。现有 5 份快照全保留 + 运行时备份 `app-0.2.1-alpha.1-*`（1.69 GB，`rollback` 秒回）。
 
+## 装一个带界面的插件（统一方法，2026-10-27 定）
+```powershell
+python E:\DSH-WORKBENCH\tools\wb.py plugin-info   <包名>   # 只侦察：client 入口 / 注册槽位 / 设置分区 / peer
+python E:\DSH-WORKBENCH\tools\wb.py install-plugin <包名|目录> [--keep-nav 标题] [--no-restart]
+```
+`install-plugin` 一条命令做完五件事：①装进 bench profile（pnpm，走 `home\profiles\bench\.npmrc` 里的镜像）②按 `package.json` 的 `exports["./client"]` 找客户端入口、解析 `slots.inject/register`（含 `const SLOT='…'` 常量写法）认出它会露在哪 ③把设置分区标题写进 `state\ui-config.json` 的 `keepNav`（**裁剪白名单已从 `ui\workbench.js` 搬到这个文件，读 `/wb-ui/config`**，所以装插件再也不用改代码）④安全重启（先 stop、等端口真的释放、再 start，避开 EADDRINUSE 假故障）⑤验证：端口 / bundle+linked / 页面模块表里有没有 `<包名>/client.js` / **本次启动**（按日志偏移量算）有没有 EADDRINUSE 或 startup failed。
+
+两条坑要记住：
+- **市集卡片上的短名 ≠ npm 包名**。`dsh-message-ops` 的真名是 `@240xu/dsh-message-ops`；权威数据在 `https://awesome-dsh-plugin.com/plugins.json`（含 `npm`、`install`、`capabilities` 字段）。
+- **很多“可视化插件”注册的是 `conversation.*` / `chat.*` / `composer.*` 槽位**，而工作台没有会话界面（不接 agent）——装了功能在、界面看不见。`install-plugin` 会对这种情况明确告警，别以为装失败。
+
+
 ## 常用验证手段（别靠猜）
+
 > git：本仓库**没有配全局身份**，直接 `git commit` 会报 `Author identity unknown`；用 `git -c user.name=meow -c user.email=meow@local commit -m "…"`，提交后 `git status --short` 必须为空。
 > 重启会换 token：`wb.py restart` 之后，已经开着的页面 cookie 失效（主区全白）。**必须**把页面导航到 `wb.py url` 打出的新地址（`Ctrl+L` 输入后可能要按两次 Enter，第一次会被地址栏下拉建议吃掉）。
 > 动浏览器之前**每次都要重新确认标签**：标题里的「和另外 N 个页面」就是标签数，活动标签不一定还是上次那个。2026-10-27 我沿用昨晚「只有一个标签」的结论直接导航，把用户正开着的 dsh-market 页面顶掉了（已用 `Alt+←` 恢复）。正确做法：先 `Get-Process msedge → MainWindowTitle` + 截图看清标签，再决定按键。

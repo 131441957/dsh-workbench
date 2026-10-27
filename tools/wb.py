@@ -554,6 +554,285 @@ def cmd_plugins(action: str = "list", spec: str = "", bundle: str = "") -> int:
     return 2
 
 
+def ui_config_path() -> Path:
+    return STATE_DIR / "ui-config.json"
+
+
+def ui_config_load() -> dict:
+    try:
+        data = json.loads(ui_config_path().read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def ui_config_save(cfg: dict) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    ui_config_path().write_text(json.dumps(cfg, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+
+
+def detect_ui_entries(pkg: Path) -> dict:
+    """猜这个插件会露在哪里：客户端入口文件、注册的槽位、设置分区标题。"""
+    out = {"titles": [], "sidebar": False, "client": False, "clientPath": "", "slots": []}
+
+    # ① 客户端入口：优先按 package.json 的 exports["./client"] 解析，别猜路径
+    meta = {}
+    try:
+        meta = json.loads((pkg / "package.json").read_text(encoding="utf-8"))
+    except Exception:
+        meta = {}
+    candidates = []
+    exports = meta.get("exports")
+    if isinstance(exports, dict):
+        entry = exports.get("./client")
+        if isinstance(entry, str):
+            candidates.append(entry)
+        elif isinstance(entry, dict):
+            for key in ("default", "import", "require"):
+                if isinstance(entry.get(key), str):
+                    candidates.append(entry[key])
+                    break
+    candidates += ["client/client.js", "client.js", "src/client.js", "dist/client.js", "lib/client.js"]
+    for rel in candidates:
+        p = pkg / rel.lstrip("./")
+        if p.exists():
+            out["client"] = True
+            out["clientPath"] = rel
+            try:
+                text = p.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                text = ""
+            # ② 注册了哪些槽位（决定它的界面能不能在工作台里出现）
+            #    很多插件写成常量：const SLOT = 'conversation.message.actions'，所以要先把常量表建出来
+            consts = {}
+            for cm in re.finditer(r"""const\s+([A-Za-z_$][\w$]*)\s*=\s*['"]([^'"]+)['"]""", text):
+                consts[cm.group(1)] = cm.group(2)
+
+            def resolve(token: str) -> str:
+                token = token.strip()
+                if token in consts:
+                    return consts[token]
+                return token
+
+            found = []
+            for m in re.finditer(r"""slots\.inject\(\s*([A-Za-z_$][\w$]*|['"][^'"]+['"])""", text):
+                found.append(resolve(m.group(1).strip("'\"")))
+            for m in re.finditer(r"""register\(\s*\{[^}]*?name:\s*([A-Za-z_$][\w$]*|['"][^'"]+['"])""", text, re.S):
+                found.append(resolve(m.group(1).strip("'\"")))
+            for slot in found:
+                if slot and slot not in out["slots"] and not slot.startswith(("sidebar.panellist", "main")):
+                    out["slots"].append(slot)
+            out["sidebar"] = "sidebar.panellist" in found or "sidebar.panellist" in text
+            break
+
+    # ③ 设置分区标题（locale 里的 meta.title 一类）
+    locale_dir = pkg / "locale"
+    if locale_dir.exists():
+        for loc in sorted(locale_dir.glob("*.json")):
+            try:
+                data = json.loads(loc.read_text(encoding="utf-8-sig"))
+            except Exception:
+                continue
+            title = None
+            if isinstance(data, dict):
+                meta_loc = data.get("meta")
+                if isinstance(meta_loc, dict):
+                    title = meta_loc.get("title")
+                if not title:
+                    for key in ("title", "name", "section.title", "settings.title"):
+                        if isinstance(data.get(key), str):
+                            title = data[key]
+                            break
+            if isinstance(title, str) and title.strip() and title.strip() not in out["titles"]:
+                out["titles"].append(title.strip())
+    return out
+
+
+def http_get_text(url: str, timeout: float = 25.0) -> str:
+    """带 cookie 的 GET：工作台首页要先拿 token 种 cookie，跳转后才是正文。"""
+    import http.cookiejar as cookiejar
+    from urllib.request import HTTPCookieProcessor, Request, build_opener
+    jar = cookiejar.CookieJar()
+    opener = build_opener(HTTPCookieProcessor(jar))
+    req = Request(url, headers={"accept": "text/html"})
+    with opener.open(req, timeout=timeout) as resp:
+        return resp.read().decode("utf-8", "replace")
+
+
+def port_listening(port: int) -> bool:
+    import socket as _socket
+    with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
+def http_json(url: str, timeout: float = 10.0):
+    from urllib.request import urlopen
+    with urlopen(url, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8", "replace"))
+
+
+def cmd_plugin_info(name: str) -> int:
+    """只看不装：这个插件会露在哪个槽位、有没有设置分区、peer 约束是什么。"""
+    if not name:
+        bad("用法：wb.py plugin-info <包名>")
+        return 2
+    prof = WB_HOME / "profiles" / WB_PROFILE
+    pkg_dir = prof / "node_modules" / name
+    head(f"插件侦察：{name}")
+    if not pkg_dir.exists():
+        warn("这个包还没装到 bench profile（装上后再看会更准；这里只能看 npm 元信息）")
+        ver = npm_latest_version(name)
+        info(f"npm 最新版本：{ver or '查不到'}")
+        return 0
+    try:
+        meta = json.loads((pkg_dir / "package.json").read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        bad(f"读不到 package.json：{exc}")
+        return 1
+    ok(f"{meta.get('name')} v{meta.get('version')}")
+    peers = meta.get("peerDependencies") or {}
+    if peers:
+        for k, v in peers.items():
+            info(f"peer {k} {v}")
+    else:
+        info("没有声明 peer 依赖（升级时靠人工验证）")
+    dsh = meta.get("dsh") or {}
+    info(f"dsh.client：{json.dumps(dsh.get('client'), ensure_ascii=False)}")
+    entries = detect_ui_entries(pkg_dir)
+    if entries.get("client"):
+        ok(f"客户端入口：{entries.get('clientPath')}")
+    else:
+        warn("没有客户端入口（纯宿主插件，界面里不会有它）")
+    if entries.get("slots"):
+        info(f"注册槽位：{', '.join(entries['slots'][:12])}")
+    if entries.get("titles"):
+        info(f"设置分区标题：{', '.join(entries['titles'])}")
+    if entries.get("sidebar"):
+        info("有侧栏入口候选（可能在顶栏出现）")
+    return 0
+
+
+def cmd_install_plugin(spec: str, keep_nav: str = "", no_restart: bool = False) -> int:
+    """可视化插件统一安装：装 → 认出界面入口 → 登记白名单 → 安全重启 → 验证。
+
+    一条命令装完就能用，不需要再改 ui\\workbench.js。
+    """
+    if not spec:
+        bad("用法：wb.py install-plugin <npm 包名 或 插件目录> [--keep-nav 标题1,标题2] [--no-restart]")
+        return 2
+    head("可视化插件统一安装")
+
+    # ① 装进 bench profile（内部会跑 pnpm；失败就直接停）
+    if cmd_plugins("add", spec, "") != 0:
+        bad("安装失败，已中止")
+        return 1
+
+    # ② 定位装好的包
+    if (Path(spec) / "package.json").exists():
+        try:
+            target = json.loads((Path(spec) / "package.json").read_text(encoding="utf-8")).get("name", spec)
+        except Exception:
+            target = spec
+    else:
+        target = spec
+    target = str(target).strip()
+    pkg_dir = WB_HOME / "profiles" / WB_PROFILE / "node_modules" / target
+    entries = detect_ui_entries(pkg_dir) if pkg_dir.exists() else {"titles": [], "sidebar": False, "client": False, "slots": []}
+    ok(f"包：{target}（{'目录' if pkg_dir.exists() else '未找到目录'}，client={'有 ' + str(entries.get('clientPath') or '') if entries.get('client') else '无'}）")
+    if entries.get("slots"):
+        info(f"注册槽位：{', '.join(entries['slots'][:8])}")
+
+    # ③ 设置分区标题写进 UI 白名单（这就是以前每次要手改 KEEP_NAV 的那一步）
+    titles = [t.strip() for t in keep_nav.split(",") if t.strip()] or entries.get("titles") or []
+    if titles:
+        cfg = ui_config_load()
+        keep = [t for t in (cfg.get("keepNav") or []) if isinstance(t, str)]
+        added = [t for t in titles if t not in keep]
+        keep.extend(added)
+        cfg["keepNav"] = keep
+        ui_config_save(cfg)
+        ok(f"设置导航白名单：新增 {added or '无（已在白名单）'}；当前 {keep}")
+    else:
+        warn("没认出设置分区标题；如果它确实在设置里加了分区，用 --keep-nav 指定")
+
+    if no_restart:
+        warn("已跳过重启；改动要 wb.py restart 后才生效")
+        return 0
+
+    # ④ 安全重启：先停、等端口真的释放、再启动（避免 EADDRINUSE 造成假故障）
+    err_log = LOG_DIR / "workbench.err.log"
+    err_offset = err_log.stat().st_size if err_log.exists() else 0
+    cmd_stop()
+    waited = 0.0
+    while port_listening(WB_PORT) and waited < 20:
+        time.sleep(0.5)
+        waited += 0.5
+    if port_listening(WB_PORT):
+        bad(f"端口 {WB_PORT} 20 秒内没释放，放弃自动启动；稍后手动 wb.py restart")
+        return 1
+    cmd_start(True)
+
+    # ⑤ 验证
+    head("验证")
+    up = False
+    for _ in range(40):
+        if port_listening(WB_PORT):
+            up = True
+            break
+        time.sleep(0.5)
+    (ok if up else bad)(f"端口 {WB_PORT} {'在听' if up else '没起来'}")
+    if not up:
+        return 1
+
+    try:
+        data = http_json(f"http://127.0.0.1:{WB_PORT}/wb-api/plugins")
+        row = next((p for p in data.get("plugins", []) if p.get("name") == target), None)
+        if row:
+            healthy = bool(row.get("inBundles") and row.get("linked"))
+            (ok if healthy else bad)(
+                f"{target}: bundle={'✓' if row.get('inBundles') else '✗'} linked={'✓' if row.get('linked') else '✗'} v={row.get('version')}")
+        else:
+            bad(f"插件清单里没有 {target}")
+    except Exception as exc:  # noqa: BLE001
+        warn(f"读插件清单失败：{exc}")
+
+    try:
+        url = current_url()
+        if url:
+            html = http_get_text(url)
+            has_client = f"{target}/client.js" in html
+            (ok if has_client else warn)(
+                f"页面模块表{'包含' if has_client else '不含'} {target}/client.js（决定它的界面能不能渲染）")
+    except Exception as exc:  # noqa: BLE001
+        warn(f"检查页面模块表失败：{exc}")
+
+    # 只看“本次启动之后新写入”的错误，别把历史 EADDRINUSE 当成本次故障
+    if err_log.exists():
+        try:
+            with open(err_log, "rb") as fh:
+                fh.seek(err_offset)
+                fresh = fh.read().decode("utf-8", "replace")
+        except Exception:
+            fresh = ""
+        if "EADDRINUSE" in fresh or "startup failed" in fresh:
+            warn("本次启动日志里有 EADDRINUSE / startup failed —— 确认 59430 只有一个 owner（见 docs）")
+        else:
+            ok("本次启动没有 EADDRINUSE / startup failed")
+
+    if entries.get("sidebar"):
+        info("它声明了侧栏入口：如果自带「侧栏显示」开关，点一下就会出现在顶栏（顶栏自动发现）")
+    if titles:
+        info(f"打开 设置 → {titles[0]} 就能看到它的界面")
+    # 界面能不能在工作台里露出来：工作台只有我们自己做的面板，没有会话/聊天界面
+    slots = entries.get("slots") or []
+    invisible = [s for s in slots if s.startswith(("conversation.", "chat.", "composer.", "message."))]
+    if invisible and not entries.get("sidebar") and not titles:
+        warn(f"它只注册了 {', '.join(invisible[:4])} 这类槽位——工作台没有会话界面，装了也看不到（功能可能仍可用）")
+    info("入口：wb.py url / wb.py page")
+    return 0
+
+
 def current_url() -> str | None:
     """取最新的带 token 入口（token 每次重启都换）。"""
     log = LOG_DIR / "workbench.out.log"
@@ -1059,7 +1338,7 @@ def cmd_info() -> int:
 BACKUP_DIRS = ["tools", "plugins", "seeds", "docs", "ui"]
 BACKUP_FILES = ["config.json", ".gitignore"]
 # state/ 整体不进快照（临时快照、日志、token 之类），但这个文件是用户亲手写的插件备注，必须留住
-BACKUP_STATE_FILES = ["plugin-notes.json"]
+BACKUP_STATE_FILES = ["plugin-notes.json", "ui-config.json"]
 BACKUP_PROFILE_FILES = ["package.json", "cordis.patch.yml", "pnpm-lock.yaml", "pnpm-workspace.yaml"]
 
 
@@ -1859,6 +2138,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--home", default="")
     ap.add_argument("--note", default="")
     ap.add_argument("--from", dest="from_archive", default="latest")
+    ap.add_argument("--keep-nav", dest="keep_nav", default="")
+    ap.add_argument("--no-restart", dest="no_restart", action="store_true")
     ap.add_argument("-n", type=int, default=40)
     args = ap.parse_args(argv[1:])
 
@@ -1876,6 +2157,10 @@ def main(argv: list[str]) -> int:
         "api": lambda: cmd_api(),
         "compat": lambda: cmd_compat(),
         "plugins": lambda: cmd_plugins(args.sub or "list", (args.rest[0] if args.rest else ""), args.bundle),
+        "install-plugin": lambda: cmd_install_plugin(
+            (args.rest[0] if args.rest else (args.sub or args.spec or "")), args.keep_nav, args.no_restart),
+        "plugin-info": lambda: cmd_plugin_info(
+            (args.rest[0] if args.rest else (args.sub or args.spec or ""))),
         "url": lambda: cmd_url(),
         "open": lambda: cmd_open(),
         "page": lambda: cmd_page(),
