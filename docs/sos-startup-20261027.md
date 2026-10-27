@@ -93,8 +93,14 @@ async function connectDesktopWelcome(authenticatedUrl, send, cookies = () => Pro
 
 两条路：
 
-1. **换回原来的**（想恢复旧登录态/localStorage）：退出所有 Harness → `-Restore`；当前这份会被留作 `dsh-desktop.rc3`
+1. **换回原来的**（想恢复旧登录态/localStorage）：退出**桌面程序**（含托盘）→ 双击桌面「**还原主驾配置**」快捷方式，或跑
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File "E:\DSH-WORKBENCH\tools\fix-sos-start.ps1" -Restore
+   ```
+   当前这份会被留作 `dsh-desktop.rc3`（不会丢）。工作台的后台进程不用关——它们不占 profile，脚本只拦桌面壳。
 2. **就用现在这份**：把 `dsh-desktop.main-backup` 改个名（如 `…-20261027`），否则下次 `-Isolate` 会被它挡住
+
+实测（2026-10-27 13:2x）：`dsh-desktop` = 96 文件（隔离时新建的），`dsh-desktop.main-backup` = **776 文件**（原本那份，含登录态/缓存/本地存储）。
 
 `-Status` 现在会直接把这段提醒打出来。
 

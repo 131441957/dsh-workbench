@@ -51,11 +51,23 @@ function Show-Status {
   Write-Host "  独立 home：            $SosHome  $([bool](Test-Path $SosHome))"
 }
 
+# 只找「桌面壳」进程：它们才占着 Electron profile（Cookies / localStorage / 单实例锁）。
+# 工作台是 headless 的 node 进程（命令行带 --expose-internals），不用关。
+function Get-DesktopShells {
+  Get-CimInstance Win32_Process -Filter "Name = 'DeepSeek Harness.exe'" -ErrorAction SilentlyContinue |
+    Where-Object {
+      $cl = [string]$_.CommandLine
+      ($cl -notmatch '--expose-internals') -and ($cl -notmatch 'subprocess-local')
+    }
+}
+
 function Assert-NoHarness($why) {
-  $procs = Get-Process -Name 'DeepSeek Harness' -ErrorAction SilentlyContinue
-  if ($procs) {
-    Write-Host "[!] $why 需要先完全退出 DeepSeek Harness（含托盘）。现在还有 $($procs.Count) 个进程。" -ForegroundColor Yellow
-    Write-Host "    主驾 E:\SSS 与工作台 E:\DSH-WORKBENCH\app 都要退；工作台可以先用 wb.py suspend 停掉。" -ForegroundColor Yellow
+  $shells = @(Get-DesktopShells)
+  if ($shells.Count -gt 0) {
+    $paths = $shells | ForEach-Object { try { $_.ExecutablePath } catch { $null } } | Where-Object { $_ } | Sort-Object -Unique
+    Write-Host "[!] $why 需要先退出 DeepSeek Harness **桌面程序**（含托盘图标）。" -ForegroundColor Yellow
+    Write-Host "    还在跑的安装：$($paths -join ' ; ')" -ForegroundColor Yellow
+    Write-Host "    （工作台的后台进程不用关，它们不占 profile）" -ForegroundColor Yellow
     if (-not $WhatIf) { exit 2 }
   }
 }
@@ -127,13 +139,20 @@ if ($Restore) {
     Write-Host "  没有待还原的备份（$profileBackup 不存在），可能已经还原过了。" -ForegroundColor Yellow
     exit 0
   }
+  if ($WhatIf) {
+    Write-Host "  [干跑] 会先把当前 profile 保留成：dsh-desktop.rc3"
+    Write-Host "  [干跑] 再把 $profileBackup 换回 $profileDir"
+    exit 0
+  }
   if (Test-Path $sosProfileLeft) { Remove-Item $sosProfileLeft -Recurse -Force -ErrorAction SilentlyContinue }
   if (Test-Path $profileDir) {
     Write-Host "  [..] 保留 SOS 这次生成的 profile 作参考：→ dsh-desktop.rc3"
-    Rename-Item -Path $profileDir -NewName 'dsh-desktop.rc3'
+    try { Rename-Item -Path $profileDir -NewName 'dsh-desktop.rc3' }
+    catch { Write-Host "  [x] 改名失败（多半还被进程占用）：$($_.Exception.Message)" -ForegroundColor Red; exit 4 }
   }
   Write-Host "  [..] 换回主驾 profile：$profileBackup → $profileDir"
-  Rename-Item -Path $profileBackup -NewName 'dsh-desktop'
+  try { Rename-Item -Path $profileBackup -NewName 'dsh-desktop' }
+  catch { Write-Host "  [x] 换回失败：$($_.Exception.Message)" -ForegroundColor Red; exit 5 }
   Write-Host "  [ok] 已还原。主驾可以正常启动了。" -ForegroundColor Green
   exit 0
 }
