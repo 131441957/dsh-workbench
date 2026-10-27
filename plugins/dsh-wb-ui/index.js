@@ -53,6 +53,11 @@ export function apply(ctx) {
     const css = readUi('workbench.css')
     const js = readUi('workbench.js')
     let out = html
+    // 标签页标题：让浏览器/任务栏显示「DSH 工作台」而不是 harness 的名字。
+    // 这条必须在这里做（tapIndex），这样分发包里也带着，客户一眼能分清工作台和 harness。
+    out = /<title>[^<]*<\/title>/i.test(out)
+      ? out.replace(/<title>[^<]*<\/title>/i, '<title>DSH 工作台</title>')
+      : out.replace(/<head([^>]*)>/i, '<head$1><title>DSH 工作台</title>')
     if (css) {
       const block = `<style id="wb-ui-css" data-wb="1">\n${css}\n</style>`
       out = /<\/head>/i.test(out) ? out.replace(/<\/head>/i, block + '\n</head>') : block + out

@@ -610,6 +610,13 @@
 
   const boot = () => {
     attachStyle()
+    // 标题双保险：注入层已经改写了 <title>，这里再设一次（SPA 可能自己改标题）
+    try {
+      document.title = 'DSH 工作台'
+      new MutationObserver(() => {
+        if (document.title !== 'DSH 工作台') document.title = 'DSH 工作台'
+      }).observe(document.querySelector('title') || document.head, { childList: true, subtree: true, characterData: true })
+    } catch { /* 忽略 */ }
     loadUiConfig() // 先读裁剪白名单（异步，不阻塞）；读了之后 sweep 里的裁剪就用新列表
     dismiss()
     sweep() // 第一轮：先只处理 toast / 弹窗，不动布局
