@@ -1753,6 +1753,10 @@ def cmd_pack(out: str = "", include_test: bool = False, force: bool = False,
         "note": "复制为 config.json 后按需改端口；install/home 路径在首次运行 wb.py doctor 时自动识别",
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
+    # 版本文件必须进包：客户装上以后，页面顶栏/水印和安装器的「构建：」那行都读它。
+    # 少了它就会退化成 "dev"（2026-10-27 发现：包内没有 VERSION → 客户看到的版本是 vdev）。
+    (dest / "VERSION").write_text(ver + "\n", encoding="utf-8")
+
     # 双击安装器：installer\ 下的文件复制到**包根**（它们会找同级的 tools\wb.py）
     # install* = 安装/修复，uninstall* = 卸载（默认演练，-Apply 才真动手）
     installer_dir = WB_ROOT / "installer"
