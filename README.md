@@ -22,6 +22,17 @@
 
 ## 快速开始
 
+**最省事：分发包里双击 `install.cmd`**（会自动做体检 → 装运行时 → 建 profile → 装接入层 → 打印入口）。
+
+命令行等价物：
+
+```powershell
+python tools\wb.py setup            # = preflight + install + attach（幂等，重复跑安全）
+python tools\wb.py page             # 打开页面（带 token）
+```
+
+想看清每一步就分步跑：
+
 ```powershell
 python tools\wb.py install          # 复制一份主驾运行时到 app\，准备 bench profile
 python tools\wb.py attach           # 预览：把桥装进主驾 profile（确认后加 --apply）

@@ -1686,6 +1686,15 @@ def cmd_pack(out: str = "", include_test: bool = False, force: bool = False) -> 
         "note": "复制为 config.json 后按需改端口；install/home 路径在首次运行 wb.py doctor 时自动识别",
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
+    # 双击安装器：installer\ 下的两个文件复制到**包根**（它们会找同级的 tools\wb.py）
+    installer_dir = WB_ROOT / "installer"
+    if installer_dir.is_dir():
+        for name in ("install.cmd", "install.ps1"):
+            src_file = installer_dir / name
+            if src_file.exists():
+                shutil.copy2(src_file, dest / name)
+        info("已复制双击安装器 install.cmd / install.ps1")
+
     (dest / "README.md").write_text(f"""# DSH 工作台 {ver}（分发包）
 
 工作台 = 独立的 DSH 运行时副本 + 自带插件宿主，用来装/改插件而不碰你的主 harness。
@@ -2243,6 +2252,66 @@ def cmd_url() -> int:
         bad("还没有入口（工作台没启动过）：wb.py start")
         return 1
     print(url)
+    return 0
+
+
+# ── 一键安装：preflight → install → attach（客户机/双击安装器的入口）────────────
+# 为什么要有它：分步（paths→preflight→install→attach）对开发者清晰，对客户太啰嗦。
+# 这里把它们串成一条，仍然保持所有安全性质：
+#   · 门禁照跑（incompatible 直接中止，一个字节运行时都不复制）
+#   · 运行时已存在就跳过复制（幂等，重复点不会再多占 1.6GB）
+#   · attach 默认**只在没接过时**才做；目标 profile 自动挑（desktop 优先）
+#   · 不自动打开的页面要显式 --open（打开页面永远无副作用）
+def cmd_setup(no_attach: bool = False, do_open: bool = False, yes: bool = False) -> int:
+    head("一键安装（preflight → install → attach）")
+    paths = load_paths()
+    ok(f"目标 harness：{MAIN_INSTALL}（{paths.get('installSource', '?')}）")
+    ok(f"数据目录：{MAIN_HOME}（{paths.get('homeSource', '?')}）")
+
+    verdict = _preflight_verdict(str(MAIN_INSTALL))
+    ok(f"版本 {verdict['version']}｜兼容档位 {verdict['grade']}")
+    if verdict["grade"] == "incompatible":
+        bad("目标 harness 不兼容，安装中止：")
+        for b in verdict["blockers"]:
+            bad(f"  · {b}")
+        return 1
+    for d in verdict["degradations"]:
+        warn(f"降级：{d}")
+
+    if cmd_install(False) != 0:
+        bad("install 失败，setup 中止")
+        return 1
+
+    if no_attach:
+        info("跳过接入层（--no-attach）")
+    else:
+        home = MAIN_HOME
+        prof_names = [p.name for p in (home / "profiles").glob("*") if (p / "package.json").exists()] if (home / "profiles").exists() else []
+        if not prof_names:
+            warn(f"{home}\\profiles 下没有可用 profile，跳过接入层（装好 harness 后跑 wb.py attach --apply）")
+        else:
+            target = "desktop" if "desktop" in prof_names else prof_names[0]
+            meta = _profile_manifest(home / "profiles" / target)
+            deps = meta.get("dependencies") if isinstance(meta.get("dependencies"), dict) else {}
+            if BRIDGE_PKG in deps:
+                ok(f"接入层已装在该 profile（{target}），跳过")
+            else:
+                if not yes:
+                    info(f"接下来会把接入层装进 {home}\\profiles\\{target}（只改 package.json，先备份；要撤销用 detach）")
+                if cmd_attach(str(home), target, apply=True) != 0:
+                    warn("接入层安装失败——工作台本体已经可用，可以稍后手动跑 wb.py attach --apply 重试")
+                else:
+                    info("接入层改完需要**重启你的 harness** 才生效（桥是宿主代码）")
+
+    if do_open:
+        cmd_open()
+    else:
+        url = current_url()
+        if url:
+            info(f"入口（复制到浏览器）：{url}")
+        info("打开页面：wb.py page，或点桌面「DSH 工作台」")
+    head("完成")
+    ok("可以重复执行 setup（幂等）：升级后用 install --force，回滚用 rollback")
     return 0
 
 
@@ -3671,6 +3740,10 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--include-test", dest="include_test", action="store_true")
     ap.add_argument("--json", dest="as_json", action="store_true")
     ap.add_argument("--refresh", dest="force", action="store_true")
+    # setup 专用开关
+    ap.add_argument("--no-attach", dest="no_attach", action="store_true")
+    ap.add_argument("--open", dest="open_page", action="store_true")
+    ap.add_argument("-y", "--yes", dest="yes", action="store_true")
     ap.add_argument("-n", type=int, default=40)
     ap.add_argument("--limit", dest="n", type=int)
     args = ap.parse_args(argv[1:])
@@ -3727,6 +3800,7 @@ def main(argv: list[str]) -> int:
         "start-safe": lambda: cmd_start_safe(),
         "registry": lambda: cmd_registry(args.force),
         "preflight": lambda: cmd_preflight(args.install or "", args.as_json),
+        "setup": lambda: cmd_setup(args.no_attach, args.open_page, args.yes),
         "sync-bed": lambda: cmd_sync_bed(args.out or (args.rest[0] if args.rest else (args.sub or ""))),
         "plugin-search": lambda: cmd_plugin_search(
             (args.rest[0] if args.rest else (args.sub or "")), args.n),

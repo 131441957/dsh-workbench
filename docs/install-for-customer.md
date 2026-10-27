@@ -10,20 +10,44 @@
 - 磁盘：约 **2 GB**（运行时副本 1.65 GB + 其余）
 - 端口：默认 **59430**；被占用时会自动换（见第 4 节）
 
-## 1. 三步装好
+## 1. 装法一：双击（推荐，什么都不用敲）
+
+解压后在目录里双击 **`install.cmd`**（同目录还有 `install.ps1`）→ 弹一个窗口 → 等它跑完 → 回车关闭。
+
+它会自动做完：找 Python → 探测你的 harness → 兼容体检 → 复制运行时 + 建 profile → 同步 API 凭据 →
+把接入层装进你的 harness profile（**已装过就跳过**）→ 打印入口地址。
+
+- 想先看会做什么：`powershell -ExecutionPolicy Bypass -File install.ps1 -DryRun`
+- 不想动 harness profile：加 `-NoAttach`
+- 装完自动开页面：加 `-OpenPage`
+
+## 2. 装法二：一条命令
+
+```powershell
+python tools\wb.py setup
+```
+
+等价于 `preflight → install → attach`。参数：`--no-attach`（不装接入层）、`--open`（装完开页面）、`-y`（不提示）。
+
+重复跑是安全的：运行时已存在就不会再复制 1.6 GB。
+
+## 3. 装法三：分步（排障/想看清每一步）
 
 解压分发目录后，在**该目录里**执行：
 
 ```powershell
-python tools\wb.py install          # 复制你的 harness 运行时 + 建 bench profile + 起服务
-python tools\wb.py attach --apply   # 把接入层（软依赖桥）装进你的 harness profile
-python tools\wb.py page             # 打开页面（带 token）
+python tools\wb.py paths --redetect   # 确认它认对了你的 harness（装错了会复制错运行时）
+python tools\wb.py preflight          # 体检：compatible / degraded / incompatible
+python tools\wb.py install            # 复制你的 harness 运行时 + 建 bench profile + 起服务
+python tools\wb.py attach --apply     # 把接入层（软依赖桥）装进你的 harness profile
+python tools\wb.py page               # 打开页面（带 token）
 ```
 
 - `install` 是幂等的，可以反复跑（修复也用它）
 - **`install` 结束前会自己确认注入层是否就绪**；如果第一次没起来，它会自动安全重启一次——所以看到「自动重启一次」是**正常现象**，不是报错
-- 整机第一次装大约 **30~60 秒**（大头是 1.65 GB 复制）
+- 整机第一次装大约 **30~60 秒**（大头是 1.6 GB 复制）
 - `attach` 不加 `--apply` 是预览：只打印将要对你的 profile 做的改动
+- 装完 **重启一次你的 harness**，接入层的工具才会出现（桥是宿主代码）
 
 ## 2. 装完怎么确认成功
 
