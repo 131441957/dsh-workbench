@@ -285,6 +285,10 @@
   // 「设置」弹层里，应该像面板一样从顶栏一键到达）。分区标题来自 /wb-ui/config 的
   // keepNav 里除基础项之外的部分（由 wb.py install-plugin 写入），点它 = 打开设置并切到该分区。
   const settingsSectionTabs = (used) => {
+    // 保留左栏的版本（rc.3）不生成"设置类顶栏按钮"：
+    // 实测那边点设置入口根本不出弹层（dialogs=0），放上去就是点不开的死按钮。
+    // 这些版本里用户从原版左栏的账号菜单进设置，能力不丢。
+    if (state.sidebarKept) return []
     const extra = (state.uiConfig && Array.isArray(state.uiConfig.extra)) ? state.uiConfig.extra : []
     const out = []
     for (const title of extra) {
@@ -984,6 +988,27 @@
       const mode = (location.hash.match(/wb-selftest=([a-z-]+)/) || [])[1] || 'settings'
       setTimeout(() => {
         state.selftestRan = true
+        if (mode === 'check') {
+          // 诊断：点设置入口后，页面里到底有没有出现"设置弹层/分区列表"
+          openSettingsPanel()
+          setTimeout(() => {
+            const dialogs = Array.from(document.querySelectorAll('[role="dialog"], dialog'))
+            const trees = Array.from(document.querySelectorAll('[role="tree"]'))
+            const text = (document.body.innerText || '').replace(/\s+/g, ' ')
+            state.selftestInfo = {
+              dialogs: dialogs.length,
+              dialogClasses: dialogs.slice(0, 3).map((d) => String(d.className || '').slice(0, 40)),
+              trees: trees.length,
+              treeItemTexts: trees.length
+                ? Array.from(trees[0].querySelectorAll('[role="treeitem"]')).map((x) => (x.textContent || '').trim().slice(0, 20)).slice(0, 12)
+                : [],
+              bodyHasGeneral: text.includes('通用设置'),
+              bodyHasSessionMgr: text.includes('会话管理'),
+              bodySnippet: text.slice(0, 160),
+            }
+          }, 1500)
+          return
+        }
         if (mode === 'relocate') {
           // 实验：把原版左栏里的设置入口整行搬到我们顶栏，再点它，看能不能开设置
           const slot = document.querySelector('[data-slot="sidebar.settings"]')
