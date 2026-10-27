@@ -137,18 +137,31 @@ window.__ModuleLoader__.load({
             const note = notes[p.name] || ''
             return p.name.toLowerCase().includes(needle) || note.toLowerCase().includes(needle)
           })
-          .map((p) => ({
-            id: `plugin:${p.name}`,
-            head: p.name,
-            meta: [
-              p.version ? `v${p.version}` : '无版本',
-              p.inBundles ? '已登记' : '未登记',
-              p.linked ? '已链接' : '缺 node_modules',
-            ].join(' · '),
-            body: `依赖声明: ${p.spec}`,
-            note: notes[p.name] || '',
-            extra: !p.inBundles || !p.linked ? '⚠️ 这条不会生效：' + (!p.inBundles ? '没加进 bundles；' : '') + (!p.linked ? 'node_modules 里找不到；' : '') : '',
-          }))
+          .map((p) => {
+            const caps = Array.isArray(p.capabilities) ? p.capabilities : []
+            const risky = caps.filter((c) => ['credentials', 'fs-write', 'network', 'shell', 'dynamic-code'].includes(c))
+            const verified = p.lastVerifiedAt ? String(p.lastVerifiedAt).slice(5, 16).replace('T', ' ') : ''
+            const newer = p.latestVersion && p.version && p.latestVersion !== p.version
+            const detail = [
+              `来源 ${String(p.source || p.spec || '').slice(0, 48)}`,
+              caps.length ? `能力 ${caps.join('/')}${risky.length ? ' ⚠' : ''}` : '能力未登记（不在社区注册表里）',
+              verified ? `上次验证 ${verified}` : '未验证',
+              newer ? `可升级 ${p.version} → ${p.latestVersion}` : '',
+            ].filter(Boolean).join('  ·  ')
+            return {
+              id: `plugin:${p.name}`,
+              head: p.name,
+              meta: [
+                p.version ? `v${p.version}` : '无版本',
+                p.inBundles ? '已登记' : '未登记',
+                p.linked ? '已链接' : '缺 node_modules',
+              ].join(' · '),
+              detail,
+              body: `依赖声明: ${p.spec}`,
+              note: notes[p.name] || '',
+              extra: !p.inBundles || !p.linked ? '⚠️ 这条不会生效：' + (!p.inBundles ? '没加进 bundles；' : '') + (!p.linked ? 'node_modules 里找不到；' : '') : '',
+            }
+          })
       }
       if (tab === 'services') {
         const list = (live && live.services) || []
@@ -370,6 +383,8 @@ window.__ModuleLoader__.load({
                     h('span', { style: styles.key }, r.head),
                     r.meta ? h('span', { style: styles.dim }, r.meta) : null,
                   ),
+                  // 来源 / 声明能力 / 上次验证 / 可升级（PM-09）
+                  r.detail ? h('div', { style: { ...styles.dim, marginTop: 2 } }, r.detail) : null,
                   // 插件备注：点一下就地编辑，Ctrl+Enter 保存，Esc 取消，清空即删除
                   r.note !== undefined
                     ? h(

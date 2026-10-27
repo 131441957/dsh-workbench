@@ -56,7 +56,22 @@ async function readJson(name) {
   }
 }
 
-/** 工作台 profile 里的插件：登记(bundles) / 已链接(node_modules) / 版本。 */
+/** 工作台 profile 里的插件：登记(bundles) / 已链接(node_modules) / 版本 + 台账 + 注册表信息。 */
+let registryCache = { at: 0, data: null }
+
+async function loadRegistry() {
+  if (registryCache.data && Date.now() - registryCache.at < 60000) return registryCache.data
+  let data = { items: [] }
+  try {
+    data = JSON.parse(await readFile(join(stateDir(), 'registry.json'), 'utf8'))
+  } catch {
+    data = { items: [] }
+  }
+  if (!Array.isArray(data.items)) data.items = []
+  registryCache = { at: Date.now(), data }
+  return data
+}
+
 async function collectPlugins() {
   const home = process.env.DSH_HOME || 'E:\\DSH-WORKBENCH\\home'
   const profileDir = join(home, 'profiles', 'bench')
@@ -68,6 +83,22 @@ async function collectPlugins() {
   }
   const deps = pkg.dependencies || {}
   const bundles = (pkg.dsh && pkg.dsh.profile && pkg.dsh.profile.bundles) || []
+  // 台账（wb.py 写的安装记录）与注册表（社区插件清单，带声明能力）
+  let ledger = {}
+  try {
+    ledger = JSON.parse(await readFile(join(stateDir(), 'installed.json'), 'utf8'))
+  } catch {
+    ledger = {}
+  }
+  const registry = await loadRegistry()
+  const byNpm = new Map()
+  for (const item of registry.items) {
+    if (item && typeof item === 'object') {
+      if (item.npm) byNpm.set(String(item.npm), item)
+      if (item.name && !byNpm.has(String(item.name))) byNpm.set(String(item.name), item)
+    }
+  }
+
   const plugins = []
   for (const [name, spec] of Object.entries(deps)) {
     const dir = join(profileDir, 'node_modules', name)
@@ -80,9 +111,28 @@ async function collectPlugins() {
     } catch {
       linked = false
     }
-    plugins.push({ name, spec, linked, version, inBundles: bundles.includes(name) })
+    const led = ledger[name] || {}
+    const reg = byNpm.get(name) || null
+    plugins.push({
+      name,
+      spec,
+      linked,
+      version,
+      inBundles: bundles.includes(name),
+      // 来源：台账里的 link:/npm 说明，没有就退回 profile 里的声明
+      source: led.source || spec,
+      installedAt: led.installedAt || null,
+      lastVerifiedAt: led.lastFixAt || null,
+      client: led.client || '',
+      slots: Array.isArray(led.slots) ? led.slots : [],
+      // 声明能力来自社区注册表（credentials/fs-write/network 这类要显眼）
+      capabilities: reg && Array.isArray(reg.capabilities) ? reg.capabilities : null,
+      latestVersion: reg ? reg.version || null : null,
+      downloads: reg ? reg.downloads || null : null,
+      inRegistry: Boolean(reg),
+    })
   }
-  return { profileDir, bundles, plugins }
+  return { profileDir, bundles, plugins, registryAt: registry.fetchedAt || null }
 }
 
 // ── 能力清单：各插件在自己 package.json 的 `dsh.workbench.capabilities` 里声明，

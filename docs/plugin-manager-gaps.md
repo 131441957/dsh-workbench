@@ -19,9 +19,9 @@
 | PM-04 | `keepNav` 只增不删 | 原来只有 append | 卸载后白名单残留 | `ui-config.json` 里记 `navByPlugin`（哪个插件写的），`uninstall-plugin` 按插件清 | **已完成（2026-10-27）**：卸载实测清掉「测试分区」 |
 | PM-05 | 装的是 `latest`，不锁版本；无安装台账 | profile 里写 `"latest"` | 复现/排障无法知道"当时装的是哪个版本" | `state\installed.json` 记 包名/版本/来源/时间/客户端入口/槽位 | 部分（台账已有并含实际版本；profile 仍写 `latest`，未锁死） |
 | PM-06 | 没有装前兼容预判 | 只能运行期撞；`dshmarket` 声明 peer 最低 `0.2.1-alpha.3` 却在 `0.2.1-alpha.1` 上能跑 | 预判过严会误杀，过宽会撞崩 | `plugin-info` 里做 semver 比对，输出三档结论 | 部分（有侦察，无结论分级） |
-| PM-07 | 无搜索、无更新检查 | 只能按确切包名装 | 市场里 7211 个插件只能靠外部翻 | `plugin-search <关键词>` 读 `awesome-dsh-plugin.com/plugins.json`；`plugin-update` 对比已装版本 | 待做 |
+| PM-07 | 无搜索、无更新检查 | 只能按确切包名装 | 市场里 7211 个插件只能靠外部翻 | `plugin-search <关键词>` 读注册表缓存；`plugin-update` 对比已装版本 | **部分（2026-10-27）**：注册表缓存与「可升级」提示已就绪（`wb.py registry [--refresh]` → `state\registry.json`；面板显示 `可升级 1.70.2→1.71.1`）；还差 `plugin-search` / `plugin-update` 两个命令 |
 | PM-08 | 卸载不清 `node_modules` | pnpm 不剪（`dsh-wb-web` 那次是手动 `rmdir`） | 残留死链，`linked` 状态会骗人 | 卸载后删包目录 + 空的 scope 目录 | **已完成（2026-10-27）**：实测连 `@240xu` 空 scope 一起清 |
-| PM-09 | 插件面板信息太薄 | 只有 名称 / 版本 / 是否登记 / 是否链接 + 备注 | 看不出「来源、声明能力、上次验证时间、本次是否加载」 | 面板加列：来源、能力标签（如 `credentials`/`fs-write`，来自市场 json）、上次验证、加载状态 | 待做 |
+| PM-09 | 插件面板信息太薄 | 只有 名称 / 版本 / 是否登记 / 是否链接 + 备注 | 看不出「来源、声明能力、上次验证时间、可升级」 | 面板加列：来源、能力徽章（`credentials`/`fs-write` 这类标 ⚠，来自社区注册表）、上次验证、可升级版本 | **已完成（2026-10-27）**：`/wb-api/plugins` 合并「台账 + 注册表缓存」；面板实测显示 `来源 … · 能力 shell/dynamic-code/fs-write/… ⚠ · 上次验证 10-27 12:02 · 可升级 1.70.2→1.71.1` |
 | PM-10 | **客户没法自助备份/还原**：安装器只有「回滚运行时」（那是 app 副本），没有备份/还原快照的入口 | `wb_gui.py` 原按钮表只有 install/rollback/start/stop… | 客户出问题时只能找我们 | 安装器加「立即备份…」「快照列表」「还原快照…」+ 还原后询问「安全重启」；`wb.py backups --json` 给界面机器可读出口；`wb.py restart-safe` 走维护模式重启 | **已完成（2026-10-27）**：GUI 截图确认按钮在位；备份→破坏→还原演练通过（css 哈希回到基线、被删插件文件恢复、运行时健康） |
 
 ## 2. 分发/移植缺口（客户独立安装到别的 harness）

@@ -1756,6 +1756,51 @@ def cmd_prepublish() -> int:
     return 0
 
 
+REGISTRY_URL = "https://awesome-dsh-plugin.com/plugins.json"
+
+
+def registry_path() -> Path:
+    return STATE_DIR / "registry.json"
+
+
+def registry_load() -> dict:
+    try:
+        data = json.loads(registry_path().read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def cmd_registry(refresh: bool = False) -> int:
+    """插件注册表缓存（插件市场用的那份 json）——搜索/更新/能力徽章都靠它。
+
+    只读外部公共数据，不依赖插件市场那个插件本身。
+    """
+    head("插件注册表")
+    cached = registry_load()
+    if cached and not refresh:
+        items = cached.get("items") or []
+        ok(f"已有缓存：{len(items)} 条（{cached.get('fetchedAt', '?')}）")
+        info("要刷新：wb.py registry --refresh")
+        return 0
+    try:
+        from urllib.request import urlopen
+        raw = urlopen(REGISTRY_URL, timeout=60).read().decode("utf-8", "replace")
+        data = json.loads(raw)
+        items = data if isinstance(data, list) else (data.get("plugins") or data.get("items") or [])
+        if not items:
+            bad("注册表格式不符（没拿到条目）")
+            return 1
+        payload = {"fetchedAt": time.strftime("%Y-%m-%dT%H:%M:%S"), "url": REGISTRY_URL, "items": items}
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        registry_path().write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
+        ok(f"已缓存 {len(items)} 条 → {registry_path()}")
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        warn(f"拉注册表失败（离线也能用，只是没有搜索/能力信息）：{exc}")
+        return 1
+
+
 def current_url() -> str | None:
     """取最新的带 token 入口（token 每次重启都换）。"""
     log = LOG_DIR / "workbench.out.log"
@@ -3158,6 +3203,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--out", dest="out", default="")
     ap.add_argument("--include-test", dest="include_test", action="store_true")
     ap.add_argument("--json", dest="as_json", action="store_true")
+    ap.add_argument("--refresh", dest="force", action="store_true")
     ap.add_argument("-n", type=int, default=40)
     args = ap.parse_args(argv[1:])
 
@@ -3211,6 +3257,7 @@ def main(argv: list[str]) -> int:
         "restart": lambda: cmd_restart(args.with_watchdog),
         "restart-safe": lambda: cmd_restart_safe(),
         "start-safe": lambda: cmd_start_safe(),
+        "registry": lambda: cmd_registry(args.force),
         "logs": lambda: cmd_logs(args.n),
         "watchdog": lambda: cmd_watchdog([int(x) for x in args.main_pids.split(",") if x.strip()]),
     }
