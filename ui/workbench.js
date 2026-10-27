@@ -53,6 +53,8 @@
         masked: Boolean(state.mainMasked),
         defaulted: Boolean(document.getElementById('wb-topbar')) && state.activeMarked ? true : false,
         buttons,
+        topbarTabs: Array.from(document.querySelectorAll('#wb-topbar button.wb-tab')).map((b) => b.textContent),
+        discovered: scanSidebarEntries().map((e) => e.label),
         errors: state.errors.slice(0, 12),
         consoleErrors: (state.consoleErrors || []).slice(0, 12),
         clickLog: (state.clickLog || []).slice(0, 8),
@@ -148,17 +150,58 @@
   }
 
   // ── 3) 把侧栏藏起来，换成顶部导航 ────────────────────────────────────
-  // 顶栏标签分组：左侧（Harness会话 / 插件），右侧（状态 / 设置）
-  const TABS_LEFT = [
-    { label: 'Harness会话', entry: 'Harness会话' },
-    { label: '插件', entry: '插件' },
-  ]
-  const TABS_RIGHT = [
-    { label: '状态', entry: '状态', panelTab: 'services' },
-    { label: '设置', entry: '设置' },
-  ]
-  const TABS = [...TABS_LEFT, ...TABS_RIGHT]
+  // 顶栏**不写死**：面板清单从应用自己的侧栏入口行动态发现。
+  // 任何插件只要注册 `sidebar.panellist` + `main`，就会自动出现在顶栏里，
+  // 装/卸插件都不需要再改这个文件（最初把 4 个按钮写死，每装一个新插件都得改代码）。
+  const LEFT_ORDER = ['Harness会话', '插件']  // 左边固定顺序；没列到的一律排在左边末尾
+  const RIGHT_ORDER = ['状态', '设置']         // 右边，顺序即显示顺序
   const DEFAULT_PANEL = 'Harness会话'
+  const PANEL_TAB_HINTS = { 状态: 'services' } // 点这个入口时顺带把面板内部标签切到哪个
+
+  // 侧栏入口行（类名形如 `xxx_panelRow`），排除我们自己的顶栏按钮
+  const scanSidebarEntries = () => {
+    const rows = Array.from(document.querySelectorAll('[class*="_panelRow"]'))
+      .filter((el) => !el.closest('#wb-topbar'))
+    const seen = new Set()
+    const out = []
+    for (const el of rows) {
+      const label = textOf(el)
+      if (!label || seen.has(label)) continue
+      seen.add(label)
+      out.push({ label, el, entry: label, panelTab: PANEL_TAB_HINTS[label] })
+    }
+    return out
+  }
+
+  // 发现结果 → 顶栏布局（偏好顺序优先，未知入口自动归左边）
+  // 兜底：`设置`这类入口不是面板行（没有 `_panelRow`），扫不到就按文字找按钮——
+  // 只对名单里列出来的名字做兜底，新插件仍然靠 `_panelRow` 自动发现。
+  const entryFor = (label, byLabel) => {
+    const hit = byLabel.get(label)
+    if (hit) return hit
+    const btn = findButton(label)
+    return btn ? { label, el: btn, entry: label, panelTab: PANEL_TAB_HINTS[label] } : null
+  }
+
+  const planTabs = () => {
+    const entries = scanSidebarEntries()
+    const byLabel = new Map(entries.map((e) => [e.label, e]))
+    const left = []
+    for (const label of LEFT_ORDER) {
+      const hit = entryFor(label, byLabel)
+      if (hit) left.push(hit)
+    }
+    for (const e of entries) {
+      if (LEFT_ORDER.includes(e.label) || RIGHT_ORDER.includes(e.label)) continue
+      left.push(e)
+    }
+    const right = []
+    for (const label of RIGHT_ORDER) {
+      const hit = entryFor(label, byLabel)
+      if (hit) right.push(hit)
+    }
+    return { left, right, all: [...left, ...right] }
+  }
 
   const findButton = (text) =>
     Array.from(document.querySelectorAll('button, a, [role="button"]')).find((el) => textOf(el) === text)
@@ -206,13 +249,15 @@
   }
 
   const clickTab = (tab) => {
-    const btn = findButton(tab.entry)
+    // 优先按文字现找（React 重绘会换掉行元素），找不到再用建栏时缓存的元素
+    const btn = findButton(tab.label) || (tab.el && tab.el.isConnected ? tab.el : null)
     if (btn) btn.click()
     applyPanelTab(tab.panelTab)
     markActive(tab.label)
   }
 
   const markActive = (label) => {
+    state.activeTab = label
     const bar = document.getElementById('wb-topbar')
     if (!bar) return
     for (const node of bar.querySelectorAll('button.wb-tab')) {
@@ -230,16 +275,18 @@
     return btn
   }
 
-  const buildTopbar = () => {
-    if (document.getElementById('wb-topbar')) return document.getElementById('wb-topbar')
+  const buildTopbar = (plan) => {
+    const existing = document.getElementById('wb-topbar')
+    if (existing) existing.remove()
     const bar = document.createElement('div')
     bar.id = 'wb-topbar'
+    bar.dataset.wbSig = plan.all.map((t) => t.label).join('|')
     const brand = document.createElement('div')
     brand.className = 'wb-brand'
     brand.innerHTML = 'DSH 工作台<small>59430</small>'
     bar.appendChild(brand)
 
-    for (const tab of TABS_LEFT) {
+    for (const tab of plan.left) {
       bar.appendChild(makeTab(tab))
     }
 
@@ -247,7 +294,7 @@
     spacer.className = 'wb-spacer'
     bar.appendChild(spacer)
 
-    for (const tab of TABS_RIGHT) {
+    for (const tab of plan.right) {
       bar.appendChild(makeTab(tab))
     }
 
@@ -258,7 +305,18 @@
 
     document.body.appendChild(bar)
     state.topbar = true
+    if (state.activeTab) markActive(state.activeTab)
     return bar
+  }
+
+  // 入口集合变了才重建顶栏：装/卸插件、面板延迟注册都会自动跟上
+  const refreshTopbar = () => {
+    const plan = planTabs()
+    if (!plan.all.length) return document.getElementById('wb-topbar')
+    const sig = plan.all.map((t) => t.label).join('|')
+    const bar = document.getElementById('wb-topbar')
+    if (bar && bar.dataset.wbSig === sig) return bar
+    return buildTopbar(plan)
   }
 
   // 让主内容区给顶栏留出高度：给 body 加顶栏高度的 padding（不动应用内部结构，
@@ -280,11 +338,11 @@
       expandMain(chain)
       state.sidebarHides = chain.length
     }
-    buildTopbar()
+    refreshTopbar()
     reserveTopSpace()
     if (!state.activeMarked && findButton(DEFAULT_PANEL)) {
       state.activeMarked = true
-      markActive(TABS.find((t) => t.entry === DEFAULT_PANEL)?.label || DEFAULT_PANEL)
+      markActive(DEFAULT_PANEL)
     }
   }
 
@@ -533,7 +591,7 @@
     setTimeout(bootDiag, 4600)
     // 自动探测只在调试时用：默认关闭，需要时控制台执行 __wbProbeSettings()
     if ((location.search + location.hash).includes('probe-settings')) setTimeout(probeSettings, 5200)
-    setInterval(() => { sweep(); watchSettings() }, 2500)
+    setInterval(() => { sweep(); refreshTopbar(); watchSettings() }, 2500)
   }
 
   if (document.readyState === 'loading') {

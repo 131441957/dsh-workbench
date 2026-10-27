@@ -1,0 +1,27 @@
+{
+  "name": "wb-plugin-template",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "工作台插件模板：复制到 plugins\\ 后改名字、wb.py plugins add 即可，不需要改工作台任何代码",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    },
+    "workbench": {
+      "capabilities": []
+    }
+  }
+}

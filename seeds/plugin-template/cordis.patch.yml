@@ -1,0 +1,5 @@
+# 工作台插件模板 · bundle 补丁
+# id 随意取（同一 profile 内唯一），name 必须等于 package.json 的 name
+- insert:
+    - id: wb-template
+      name: 'wb-plugin-template'
