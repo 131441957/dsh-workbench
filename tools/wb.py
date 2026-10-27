@@ -1505,6 +1505,7 @@ def save_port(port: int) -> None:
 DIST_EXCLUDE_DIRS = {"app", "home", "state", "logs", "backups", "attic", "ref", "dist",
                      ".git", "node_modules", "__pycache__", ".pnpm-store"}
 DIST_EXCLUDE_PLUGINS = {"dshmarket"}   # 测试插件，不进分发版
+DIST_EXCLUDE_FILES = {"fix-sos-start.ps1"}  # 本机维护脚本（针对某个安装的排障），不给客户
 
 
 def _dist_version() -> str:
@@ -1530,7 +1531,7 @@ def cmd_pack(out: str = "", include_test: bool = False, force: bool = False) -> 
     dest.mkdir(parents=True, exist_ok=True)
 
     def ignore(_dir, names):
-        return [n for n in names if n in DIST_EXCLUDE_DIRS or n.endswith(".pyc")]
+        return [n for n in names if n in DIST_EXCLUDE_DIRS or n in DIST_EXCLUDE_FILES or n.endswith(".pyc")]
 
     for name in ("tools", "ui", "docs", "seeds"):
         src = WB_ROOT / name
@@ -1542,7 +1543,7 @@ def cmd_pack(out: str = "", include_test: bool = False, force: bool = False) -> 
             for f in sorted(src.glob("*")):
                 if not f.is_file():
                     continue
-                if any(f.name.startswith(p) for p in ("handoff", "upgrade-policy", "meow-memory-", "dsh-issue-", "plugin-manager-gaps", "tools-plan", "publish-checklist")):
+                if any(f.name.startswith(p) for p in ("handoff", "upgrade-policy", "meow-memory-", "dsh-issue-", "plugin-manager-gaps", "tools-plan", "publish-checklist", "sos-")):
                     continue
                 shutil.copy2(f, dest / "docs" / f.name)
             info(f"已复制 docs/（内部记录已排除）")
