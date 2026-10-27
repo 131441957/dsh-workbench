@@ -21,7 +21,7 @@
  *    延后重试。绝不能写 `inject: ['webServer','tools']` —— 官方一旦改服务名，本 entry 会 pending，
  *    进而 `startup failed`，**把主驾一起打死**（违反"官方更新不牵连"这条需求）。
  * ② **只读主驾**：不改主 profile、不碰 E:\SSS 与 home 里的数据；写操作只发生在
- *    `E:\DSH-WORKBENCH\state\bridge-token.txt`（本插件自己的 token 文件）。
+ *    `<工作台根>\state\bridge-token.txt`（本插件自己的 token 文件）。
  * ③ **端口动态**：工作台端口从它的 config.json 读（缓存 5 秒），工作台换端口后不必重启主程序。
  *
  * ── 鉴权模型（改路由前先看这段）───────────────────────────────────────────
