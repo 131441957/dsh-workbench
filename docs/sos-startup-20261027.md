@@ -39,32 +39,39 @@ async function connectDesktopWelcome(authenticatedUrl, send, cookies = () => Pro
 
 现场数据：`Network\Cookies` 52 KB（库被运行中的进程独占，读不了；`esenttutil`/共享读都被拒）。
 
-## 3. 修复脚本（已写并演练）
+## 3. 隔离：能隔离什么、不能隔离什么（2026-10-27 更正）
+
+**先纠正一处**：最初的修复脚本只设了 `DSH_HOME`，**没有隔离 Electron profile**；而且那两次启动都死在单实例锁上，`DSH_HOME` 其实从未被真正使用（测试目录为空，后来还被清理掉了，连"没写入"的现场也没留）。所以「用它的隔离 home，不碰主驾 home」这句话当时说过头了。
+
+| 状态 | 位置 | 能否隔离 | 依据 |
+|---|---|---|---|
+| Harness home（sessions/profiles/插件 link） | `$DSH_HOME`（用户变量 = `E:\DSH\home`） | **能**（环境变量覆盖） | asar 内文档：`@deepseek-ai/dsh-home-paths` 解析 `$DSH_HOME` 或 `~/.dsh` |
+| Electron profile（Cookies / localStorage / **单实例锁**） | `%APPDATA%\@deepseek-ai\dsh-desktop` | **不能并行隔离**，只能换目录 | `claimDesktopSingleInstance()` 用 `requestSingleInstanceLock()`；`--user-data-dir` 被它自己的参数校验拒绝 |
+
+所以：**两者不能同时运行**。真要测 rc.3，得把主驾（以及工作台那份 `E:\DSH-WORKBENCH\app`）都退掉，再把 profile 目录换出去。
+
+这条不能省，因为「跨版本共用 home」已经造成过实际损失：2026-10-26 用 alpha.1（`E:\SSS`）去启动 rc.3 建好的 home，结果 profile 被重建、bundles 被重置、link 安装的插件目录被清空。
+
+## 4. 修复脚本（已改为真隔离，2026-10-27 重写）
 
 `tools\fix-sos-start.ps1`：
 
-1. 检查是否还有 DeepSeek Harness 进程 → 有就提示先完全退出
-2. 备份 `Cookies` / `Cookies-journal` / `Local State` 到 `backups\sos-cookie-fix-<时间>\`
-3. 只清理 `dsh-auth*` cookie，**每个 host 保留最新 N 条**（默认 5），其它 cookie 一条不动，然后 VACUUM
-4. 可选 `-Launch`：用独立 home `E:\SOS-test\home` 启动 SOS（不碰主驾 home），并检查是否起来
+| 参数 | 作用 |
+|---|---|
+| `-Status`（默认） | 打印现状：在跑的 Harness、`DSH_HOME`、profile 是否被换出、独立 home 是否存在 |
+| `-Isolate` | 检查进程 → 备份 profile 到 `backups\sos-isolate-<时间>\` → 把 `dsh-desktop` 改名 `dsh-desktop.main-backup` → 用 `DSH_HOME=E:\SOS-home` 启动 SOS（全新 profile，无累积 cookie） |
+| `-Restore` | SOS 退出后，把 SOS 生成的 profile 留作 `dsh-desktop.rc3`，把 `dsh-desktop.main-backup` 换回 `dsh-desktop` |
+| `-CleanCookies` | 不隔离、只清 `dsh-auth*`（每个 host 保留最新 N 条）——会同时影响主驾登录态 |
+| `-WhatIf` | 只演练不动手 |
 
-用法：
+实测（2026-10-27）：
+- `-Status` 正确列出 8 个 Harness 进程（`E:\SSS` 与 `E:\DSH-WORKBENCH\app` 两处）
+- `-Isolate -WhatIf` 在检测到进程后拒绝执行，并打印完整计划（备份路径、改名目标、启动用的 `DSH_HOME`）
+- 只清 cookie 的逻辑用合成 Chromium Cookies 库演练过：14 条 → 7 条，保留最新 5 条 `dsh-auth`，其它 cookie 未动
 
-```powershell
-# 干跑（只统计，不改）
-powershell -ExecutionPolicy Bypass -File E:\DSH-WORKBENCH\tools\fix-sos-start.ps1 -WhatIf
-# 清理
-powershell -ExecutionPolicy Bypass -File E:\DSH-WORKBENCH\tools\fix-sos-start.ps1
-# 清理并启动 SOS
-powershell -ExecutionPolicy Bypass -File E:\DSH-WORKBENCH\tools\fix-sos-start.ps1 -Launch
-```
+## 5. 还没做的（需要主驾关闭）
 
-**演练记录**（用合成 Cookies 库，Chromium 表结构，12 条 `dsh-auth` + 2 条其它）：
-`-CookieDb <合成库> -KeepNewest 5` → 14 条变 7 条，保留最新 5 条（`dsh-auth-07..11`），`dsh-keep` 与 `example.com` 的 cookie 原样未动。
-
-## 4. 还没做的（需要主驾关闭）
-
-真实 cookie 库的统计与清理、以及清理后 SOS 能否真正启动，都必须在**主驾完全退出**后才能验证——而主驾就是当前聊天所在的进程，所以这一步要用户配合。
+真实 cookie 统计、清理，以及隔离启动后 rc.3 能否真正起来——都要在主驾关闭后做（主驾就是当前聊天所在的进程）。
 
 ## 5. 顺带发现的另一个问题（主驾侧）
 

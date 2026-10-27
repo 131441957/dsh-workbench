@@ -1,123 +1,164 @@
-﻿# 修复 E:\SOS（官方 0.2.1-rc.3）启动失败
+﻿# SOS（官方版）在不干扰主驾的前提下的隔离启动工具
 #
-# 背景（2026-10-27 实测）：
-#   1) 主驾（E:\SSS）在跑时，SOS 会被 Electron 单实例锁挡住 → 秒退、无日志（这是设计行为）。
-#   2) 主驾关闭后，SOS 曾在 welcome 阶段报 `desktop welcome: Web authentication failed`。
-#      welcome 会用 Electron session fetch 带上 cookie 请求本机 launch URL，**非 2xx 就报这句**。
-#      DSH 每次启动都会发一枚 `dsh-auth-<随机>` cookie，且 cookie 不按端口隔离 →
-#      127.0.0.1 下越攒越多，请求头接近 Node 的 16KB 上限时就会 431/401。
+# 为什么要隔离：两处状态是共享的，且都出过事。
+#   ① Harness home（$DSH_HOME，当前用户变量 = E:\DSH\home）：sessions / profiles / 插件 link 目录都在里面。
+#      2026-10-26 已发生：用旧版 alpha.1 启动 rc.3 建好的 home → profile 被重建、bundles 重置、link 插件目录被清空。
+#   ② Electron profile（%APPDATA%\@deepseek-ai\dsh-desktop）：Cookies（含每次启动一枚的 dsh-auth-*）、
+#      localStorage、以及**单实例锁**。主驾在跑时 SOS 会因锁直接 quit（无日志、无窗口）。
+#      Electron profile 无法用 --user-data-dir 隔离（该安装拒绝这个参数），只能"换目录"。
 #
-# 本脚本做三件事：备份 → 只保留最新的几条 dsh-auth cookie → 启动 SOS。
-# 必须在**没有 DeepSeek Harness 进程**时运行（先完全退出主驾）。
+# 因此真隔离 = 独立 home（环境变量）+ 换掉 Electron profile 目录（改名法）。代价：不能与主驾同时运行。
 #
-# 用法（在 PowerShell 里）：
-#   powershell -ExecutionPolicy Bypass -File E:\DSH-WORKBENCH\tools\fix-sos-start.ps1 -WhatIf
-#   powershell -ExecutionPolicy Bypass -File E:\DSH-WORKBENCH\tools\fix-sos-start.ps1
-#   powershell -ExecutionPolicy Bypass -File E:\DSH-WORKBENCH\tools\fix-sos-start.ps1 -Launch
+# 用法：
+#   -Status    只看现状（默认）
+#   -Isolate   备份并换出主驾的 Electron profile，用独立 home 启动 SOS
+#   -Restore   把主驾的 Electron profile 换回来（SOS 必须先退出）
+#   -CleanCookies  不隔离、只清理累积的 dsh-auth cookie（会同时影响主驾登录态，需重新登录）
+#
+# 全部操作前后都会打印将要做的事；加 -WhatIf 只演练不动手。
 
 param(
+  [switch]$Status,
+  [switch]$Isolate,
+  [switch]$Restore,
+  [switch]$CleanCookies,
   [switch]$WhatIf,
-  [switch]$Launch,
   [int]$KeepNewest = 5,
-  [string]$CookieDb = ""
+  [string]$SosHome = 'E:\SOS-home'
 )
 
 $ErrorActionPreference = 'Stop'
-$cookieDb = if ($CookieDb) { $CookieDb } else { Join-Path $env:APPDATA '@deepseek-ai\dsh-desktop\Network\Cookies' }
-$backupRoot = 'E:\DSH-WORKBENCH\backups'
+$appdata = Join-Path $env:APPDATA '@deepseek-ai'
+$profileDir = Join-Path $appdata 'dsh-desktop'
+$profileBackup = Join-Path $appdata 'dsh-desktop.main-backup'
+$sosProfileLeft = Join-Path $appdata 'dsh-desktop.rc3'
+$cookieDb = Join-Path $profileDir 'Network\Cookies'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$backupRoot = 'E:\DSH-WORKBENCH\backups'
 
-Write-Host "== DSH 启动修复（SOS / rc.3）==" -ForegroundColor Cyan
-
-# ① 有进程就停（指定 -CookieDb 时视为离线/演练模式，跳过这一步）
-$procs = Get-Process -Name 'DeepSeek Harness' -ErrorAction SilentlyContinue
-if ($procs -and -not $CookieDb) {
-  Write-Host "[!] 还有 DeepSeek Harness 在运行（pid: $($procs.Id -join ', ')）。" -ForegroundColor Yellow
-  Write-Host "    单实例锁会挡住 SOS，而且 cookie 库被独占。请先完全退出它们再跑本脚本。" -ForegroundColor Yellow
-  if (-not $WhatIf) { exit 2 }
+function Show-Status {
+  Write-Host "== 现状 ==" -ForegroundColor Cyan
+  $procs = Get-Process -Name 'DeepSeek Harness' -ErrorAction SilentlyContinue
+  if ($procs) {
+    $paths = $procs | ForEach-Object { try { $_.Path } catch { $null } } | Where-Object { $_ } | Sort-Object -Unique
+    Write-Host "  运行中的 Harness：$($procs.Count) 个进程"
+    foreach ($p in $paths) { Write-Host "    - $p" }
+  } else { Write-Host "  运行中的 Harness：无" }
+  Write-Host "  DSH_HOME（用户变量）：$([Environment]::GetEnvironmentVariable('DSH_HOME','User'))"
+  Write-Host "  生效中的 profile 目录：$profileDir  $([bool](Test-Path $profileDir))"
+  Write-Host "  主驾 profile 备份：    $profileBackup  $([bool](Test-Path $profileBackup))"
+  Write-Host "  SOS 上次留下的 profile：$sosProfileLeft  $([bool](Test-Path $sosProfileLeft))"
+  Write-Host "  独立 home：            $SosHome  $([bool](Test-Path $SosHome))"
 }
 
-if (-not (Test-Path $cookieDb)) {
-  Write-Host "[!] 找不到 cookie 库：$cookieDb" -ForegroundColor Red
-  exit 1
-}
-
-# ② 备份
-if (-not $WhatIf) {
-  $dest = Join-Path $backupRoot "sos-cookie-fix-$stamp"
-  New-Item -ItemType Directory -Path $dest -Force | Out-Null
-  Copy-Item $cookieDb (Join-Path $dest 'Cookies') -Force
-  foreach ($extra in @('Cookies-journal', 'Local State')) {
-    $p = Join-Path (Split-Path $cookieDb) $extra
-    if (Test-Path $p) { Copy-Item $p (Join-Path $dest $extra) -Force }
+function Assert-NoHarness($why) {
+  $procs = Get-Process -Name 'DeepSeek Harness' -ErrorAction SilentlyContinue
+  if ($procs) {
+    Write-Host "[!] $why 需要先完全退出 DeepSeek Harness（含托盘）。现在还有 $($procs.Count) 个进程。" -ForegroundColor Yellow
+    Write-Host "    主驾 E:\SSS 与工作台 E:\DSH-WORKBENCH\app 都要退；工作台可以先用 wb.py suspend 停掉。" -ForegroundColor Yellow
+    if (-not $WhatIf) { exit 2 }
   }
-  Write-Host "[ok] 已备份到 $dest" -ForegroundColor Green
 }
 
-# ③ 统计 / 清理 dsh-auth cookie（保留最新 $KeepNewest 条）
-$py = @'
-import sqlite3, sys, os
-db = sys.argv[1]
-dry = sys.argv[2] == "1"
-keep = int(sys.argv[3])
-conn = sqlite3.connect(db)
-cur = conn.cursor()
-cur.execute("select count(*) from cookies", )
-total = cur.fetchone()[0]
-cur.execute("select host_key, count(*) from cookies where name like 'dsh-auth%' group by host_key order by count(*) desc")
-auth_by_host = cur.fetchall()
-print(f"cookie 总数: {total}")
-print("dsh-auth 分布:", auth_by_host if auth_by_host else "（没有）")
-cur.execute("select sum(length(host_key)+length(name)+length(coalesce(value,''))+length(coalesce(encrypted_value,''))) from cookies")
-print("cookie 内容总字节:", cur.fetchone()[0])
-if not dry:
-    deleted = 0
-    for host, _n in auth_by_host:
-        cur.execute("select rowid from cookies where host_key=? and name like 'dsh-auth%' order by creation_utc desc", (host,))
-        rows = [r[0] for r in cur.fetchall()]
-        for rid in rows[keep:]:
-            cur.execute("delete from cookies where rowid=?", (rid,))
-            deleted += 1
-    conn.commit()
-    conn.execute("vacuum")
-    cur.execute("select count(*) from cookies")
-    print(f"已删除旧 dsh-auth: {deleted} 条；清理后总数: {cur.fetchone()[0]}")
-conn.close()
-'@
-$pyFile = Join-Path $env:TEMP "sos_cookie_fix_$stamp.py"
-Set-Content -Path $pyFile -Value $py -Encoding UTF8
+Show-Status
+if (-not ($Isolate -or $Restore -or $CleanCookies)) { exit 0 }
 
-$dryFlag = if ($WhatIf) { '1' } else { '0' }
-& python $pyFile $cookieDb $dryFlag $KeepNewest
-if ($LASTEXITCODE -ne 0) {
-  Write-Host "[!] 读不了 cookie 库（多半被运行中的 DeepSeek Harness 独占）。" -ForegroundColor Yellow
-  Write-Host "    先完全退出它（包括托盘图标），再跑本脚本。" -ForegroundColor Yellow
-  Remove-Item $pyFile -Force -ErrorAction SilentlyContinue
-  exit 3
-}
-if (-not $WhatIf) { Remove-Item $pyFile -Force -ErrorAction SilentlyContinue }
+# ── 模式一：隔离启动 ───────────────────────────────────────────────
+if ($Isolate) {
+  Write-Host "`n== 隔离启动 SOS ==" -ForegroundColor Cyan
+  Assert-NoHarness "换出 Electron profile"
+  if (Test-Path $profileBackup) {
+    Write-Host "[!] 已经存在 $profileBackup —— 说明上次隔离没还原。先跑 -Restore。" -ForegroundColor Red
+    exit 3
+  }
+  if (-not (Test-Path $profileDir)) { Write-Host "[!] 找不到 $profileDir" -ForegroundColor Red; exit 1 }
 
-if ($WhatIf) {
-  Write-Host "[干跑] 没有改动。确认无误后去掉 -WhatIf 再跑一次。" -ForegroundColor Cyan
+  $dest = Join-Path $backupRoot "sos-isolate-$stamp"
+  if ($WhatIf) {
+    Write-Host "  [干跑] 会备份 profile → $dest，然后把 $profileDir 改名为 $profileBackup"
+    Write-Host "  [干跑] 会用 DSH_HOME=$SosHome 启动 E:\SOS"
+    exit 0
+  }
+
+  New-Item -ItemType Directory -Path $dest -Force | Out-Null
+  Write-Host "  [..] 备份 Electron profile（约 40 MB）→ $dest"
+  Copy-Item $profileDir (Join-Path $dest 'dsh-desktop') -Recurse -Force
+  Write-Host "  [ok] 备份完成"
+
+  Write-Host "  [..] 换出主驾 profile：$profileDir → $profileBackup"
+  Rename-Item -Path $profileDir -NewName 'dsh-desktop.main-backup'
+
+  New-Item -ItemType Directory -Path $SosHome -Force | Out-Null
+  Write-Host "  [..] 启动 SOS（DSH_HOME=$SosHome，全新 profile）"
+  $env:DSH_HOME = $SosHome
+  Start-Process -FilePath 'E:\SOS\DeepSeek Harness.exe' -WorkingDirectory 'E:\SOS'
+  Start-Sleep -Seconds 20
+  $now = Get-Process -Name 'DeepSeek Harness' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like 'E:\SOS*' }
+  if ($now) {
+    Write-Host "  [ok] SOS 已启动（pid: $($now.Id -join ', ')）。这是隔离环境：独立 home + 全新 profile。" -ForegroundColor Green
+    Write-Host "       测完：退出 SOS → 跑 -Restore 把主驾 profile 换回来。" -ForegroundColor Cyan
+  } else {
+    Write-Host "  [x] SOS 没起来。最新崩溃日志：" -ForegroundColor Red
+    $logs = Join-Path $profileDir 'logs'
+    if (Test-Path $logs) {
+      Get-ChildItem $logs -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
+        ForEach-Object { Get-Content $_.FullName -Raw }
+    } else { Write-Host "     （没有 logs 目录）" }
+    Write-Host "  [i] 主驾 profile 仍被换在 $profileBackup，记得 -Restore。" -ForegroundColor Yellow
+  }
   exit 0
 }
 
-# ④ 启动 SOS（用它自己的 home，别碰主驾 home）
-$sosHome = 'E:\SOS-test\home'
-New-Item -ItemType Directory -Path $sosHome -Force | Out-Null
-if ($Launch) {
-  Write-Host "[..] 启动 E:\SOS（DSH_HOME=$sosHome）" -ForegroundColor Cyan
-  $env:DSH_HOME = $sosHome
-  Start-Process -FilePath 'E:\SOS\DeepSeek Harness.exe' -WorkingDirectory 'E:\SOS'
-  Start-Sleep -Seconds 15
-  $now = Get-Process -Name 'DeepSeek Harness' -ErrorAction SilentlyContinue
-  if ($now) { Write-Host "[ok] 已启动（pid: $($now.Id -join ', ')）" -ForegroundColor Green }
-  else {
-    Write-Host "[x] 还是没起来。最新崩溃日志：" -ForegroundColor Red
-    Get-ChildItem (Join-Path $env:APPDATA '@deepseek-ai\dsh-desktop\logs') -File |
-      Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
-      ForEach-Object { Get-Content $_.FullName -Raw }
+# ── 模式二：还原 ───────────────────────────────────────────────────
+if ($Restore) {
+  Write-Host "`n== 还原主驾 profile ==" -ForegroundColor Cyan
+  Assert-NoHarness "还原 profile"
+  if (-not (Test-Path $profileBackup)) {
+    Write-Host "  没有待还原的备份（$profileBackup 不存在），可能已经还原过了。" -ForegroundColor Yellow
+    exit 0
   }
-} else {
-  Write-Host "[提示] cookie 已清理。现在手动启动 E:\SOS\DeepSeek Harness.exe 试试；要脚本自动启动就加 -Launch。" -ForegroundColor Cyan
+  if (Test-Path $sosProfileLeft) { Remove-Item $sosProfileLeft -Recurse -Force -ErrorAction SilentlyContinue }
+  if (Test-Path $profileDir) {
+    Write-Host "  [..] 保留 SOS 这次生成的 profile 作参考：→ dsh-desktop.rc3"
+    Rename-Item -Path $profileDir -NewName 'dsh-desktop.rc3'
+  }
+  Write-Host "  [..] 换回主驾 profile：$profileBackup → $profileDir"
+  Rename-Item -Path $profileBackup -NewName 'dsh-desktop'
+  Write-Host "  [ok] 已还原。主驾可以正常启动了。" -ForegroundColor Green
+  exit 0
+}
+
+# ── 模式三：只清 cookie（不隔离）─────────────────────────────────────
+if ($CleanCookies) {
+  Write-Host "`n== 只清理 dsh-auth cookie（不隔离）==" -ForegroundColor Cyan
+  Write-Host "  [i] 注意：profile 是共享的，清理会同时影响主驾登录态（需要重新登录）。" -ForegroundColor Yellow
+  Assert-NoHarness "清理 cookie 库"
+  if (-not (Test-Path $cookieDb)) { Write-Host "[!] 找不到 $cookieDb" -ForegroundColor Red; exit 1 }
+
+  $py = @'
+import sqlite3, sys
+db, dry, keep = sys.argv[1], sys.argv[2] == "1", int(sys.argv[3])
+conn = sqlite3.connect(db); cur = conn.cursor()
+cur.execute("select count(*) from cookies"); print("  cookie 总数:", cur.fetchone()[0])
+cur.execute("select host_key, count(*) from cookies where name like 'dsh-auth%' group by host_key")
+rows = cur.fetchall(); print("  dsh-auth 分布:", rows if rows else "（没有）")
+if not dry:
+    deleted = 0
+    for host, _n in rows:
+        cur.execute("select rowid from cookies where host_key=? and name like 'dsh-auth%' order by creation_utc desc", (host,))
+        for rid in [r[0] for r in cur.fetchall()][keep:]:
+            cur.execute("delete from cookies where rowid=?", (rid,)); deleted += 1
+    conn.commit(); conn.execute("vacuum")
+    cur.execute("select count(*) from cookies"); print("  已删除旧 dsh-auth:", deleted, "；清理后总数:", cur.fetchone()[0])
+conn.close()
+'@
+  $pyFile = Join-Path $env:TEMP "dsh_cookie_clean_$stamp.py"
+  Set-Content -Path $pyFile -Value $py -Encoding UTF8
+  $dry = if ($WhatIf) { '1' } else { '0' }
+  & python $pyFile $cookieDb $dry $KeepNewest
+  $code = $LASTEXITCODE
+  Remove-Item $pyFile -Force -ErrorAction SilentlyContinue
+  if ($code -ne 0) { Write-Host "[!] 读不了 cookie 库（被占用）。先完全退出 Harness。" -ForegroundColor Yellow; exit 3 }
+  if ($WhatIf) { Write-Host "  [干跑] 没有改动" -ForegroundColor Cyan }
+  exit 0
 }
