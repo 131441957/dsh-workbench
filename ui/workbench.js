@@ -127,6 +127,11 @@
         selftestHit: state.selftestHit || null,
         settingsOpen: settingsNavVisible(),
         sidebarKept: Boolean(state.sidebarKept),
+        topbarZ: (() => {
+          const bar = document.getElementById('wb-topbar')
+          return bar ? getComputedStyle(bar).zIndex : null
+        })(),
+        modalOpen: document.body.classList.contains('wb-modal-open'),
         accountMenuVisible: Boolean(document.querySelector('[data-slot="settings.launcher"], [data-slot="sidebar.settings"]')),
         accountHiddenBy: (() => {
           const slot = document.querySelector('[data-slot="settings.launcher"], [data-slot="sidebar.settings"]')
@@ -192,9 +197,14 @@
       display: flex; align-items: center; gap: 6px; padding: 0 12px;
       background: var(--dsw-alias-bg-base, #16181d);
       border-bottom: 1px solid var(--dsw-alias-border-secondary, #2a2e37);
-      z-index: 2147482000;
+      /* z-index 不能开太大：原来是 2147482000，会把应用自己的「设置」弹层盖住
+       * （rc.3 上用户实测「设置被顶栏挡住了」）。弹层通常 z-index 很高但不是最大，
+       * 这里取一个折中值，并在弹层打开时再降下去（见 body.wb-modal-open）。 */
+      z-index: 600;
       font: 12px/1 "Segoe UI", system-ui, sans-serif;
     }
+    /* 应用弹层（设置等）打开时，顶栏让位，避免盖住弹层顶部 */
+    body.wb-modal-open #wb-topbar { z-index: 1; }
     #wb-topbar .wb-brand {
       font-weight: 600; letter-spacing: .3px; margin-right: 10px;
       color: var(--dsw-alias-label-primary, #e6e6e6); white-space: nowrap;
@@ -258,6 +268,8 @@
         hide(node.closest('[role="status"], [role="alert"], [class*="toast" i], [class*="alert" i]') || node)
       }
     }
+    // 设置等弹层打开时给 body 打标记，让顶栏 z-index 让位（否则会盖住弹层）
+    try { document.body.classList.toggle('wb-modal-open', settingsNavVisible()) } catch { /* 忽略 */ }
     pruneSettings()
     maskUnknownMain()
     if (state.layoutApplied) return
@@ -293,9 +305,12 @@
     // 0.2.1-rc.3 上就有两个「插件」：内建插件管理器 + 我们的 wb-plugins 面板，
     // 取第一个会点进原版页面（用户 2026-10-27 报「插件界面功能没有」）。
     const byLabel = new Map()
+    // 不把原版的「更多」放进顶栏：它只是插件面板的溢出菜单（浏览更多插件/创建你的插件），
+    // 我们的「插件」面板已经覆盖这些内容（2026-10-27 用户要求去掉）。
+    const SKIP_LABELS = new Set(['更多', 'More'])
     for (const el of rows) {
       const label = textOf(el)
-      if (!label) continue
+      if (!label || SKIP_LABELS.has(label)) continue
       byLabel.set(label, { label, el, entry: label, panelTab: PANEL_TAB_HINTS[label] })
     }
     return Array.from(byLabel.values())
@@ -716,7 +731,7 @@
   const hideSidebarExtras = () => {
     const chain = findSidebarChain()
     if (!chain.length) return 0
-    const texts = ['新会话', '工作区', '默认工作区', '插件']
+    const texts = ['新会话', '工作区', '默认工作区', '插件', '更多', 'More']
     // 账号菜单（设置入口）必须留着：它通常也包在 `*_panelRow` / footer 行里，
     // 一律隐藏会把设置彻底弄没（2026-10-27 实测 rect 变成 0×0）。
     const acct = document.querySelector('[data-slot="settings.launcher"], [data-slot="sidebar.settings"]')
@@ -1116,6 +1131,17 @@
               snippet: text.slice(0, 100),
             }
           }, 900)
+          return
+        }
+        if (mode === 'ztest') {
+          // 验证"弹层打开时顶栏让位"：手动加 body.wb-modal-open，读顶栏 z-index
+          const bar = document.getElementById('wb-topbar')
+          const before = bar ? getComputedStyle(bar).zIndex : null
+          document.body.classList.add('wb-modal-open')
+          const during = bar ? getComputedStyle(bar).zIndex : null
+          document.body.classList.remove('wb-modal-open')
+          const after = bar ? getComputedStyle(bar).zIndex : null
+          state.selftestInfo = { before, during, after }
           return
         }
         if (mode === 'slots') {
