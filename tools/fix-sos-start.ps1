@@ -61,6 +61,16 @@ function Assert-NoHarness($why) {
 }
 
 Show-Status
+
+if (Test-Path $profileBackup) {
+  Write-Host ""
+  Write-Host "[!] 注意：隔离没有还原。" -ForegroundColor Yellow
+  Write-Host "    当前生效的 profile 是隔离时新建的那份；原来的主驾 profile 在：" -ForegroundColor Yellow
+  Write-Host "      $profileBackup" -ForegroundColor Yellow
+  Write-Host "    想换回原来的：退出所有 Harness → 跑 -Restore" -ForegroundColor Yellow
+  Write-Host "    想继续用现在这份：把上面那个目录改名（例如加 -$stamp 后缀），否则下次 -Isolate 会被它挡住" -ForegroundColor Yellow
+}
+
 if (-not ($Isolate -or $Restore -or $CleanCookies)) { exit 0 }
 
 # ── 模式一：隔离启动 ───────────────────────────────────────────────

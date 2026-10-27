@@ -69,9 +69,35 @@ async function connectDesktopWelcome(authenticatedUrl, send, cookies = () => Pro
 - `-Isolate -WhatIf` 在检测到进程后拒绝执行，并打印完整计划（备份路径、改名目标、启动用的 `DSH_HOME`）
 - 只清 cookie 的逻辑用合成 Chromium Cookies 库演练过：14 条 → 7 条，保留最新 5 条 `dsh-auth`，其它 cookie 未动
 
-## 5. 还没做的（需要主驾关闭）
+## 5. 结果：SOS 已经能启动（2026-10-27 13:05）
 
-真实 cookie 统计、清理，以及隔离启动后 rc.3 能否真正起来——都要在主驾关闭后做（主驾就是当前聊天所在的进程）。
+用隔离法启动成功，证据（`E:\SOS-home`）：
+
+- `profiles\desktop\` 下生成了 `cordis.patch.yml` / `cordis.yml` / `package.json` / `pnpm-workspace.yaml`（说明 profile 是自己新建的，没碰主驾的）
+- `sessions\--G-documents-...default-workspace--\session-72916422-…`（跑起来了并建了会话）
+- `.credentials.yaml`（13:04:42 写入 —— **welcome 认证通过了**，不再是 `Web authentication failed`）
+
+能确认的：**换掉 Electron profile 目录 + 独立 home 之后，rc.3 能正常启动。**
+不能确认的：究竟是"累积 cookie/localStorage"还是"跨版本共用 home"导致之前的认证失败——两样同时换掉了，没法分离。要分离得再单独试一次（只换 home 不换 profile），但没必要为结论再折腾一次。
+
+## 6. ⚠️ 当前遗留状态：隔离没还原
+
+现状（2026-10-27 13:06 实测）：
+
+| 项 | 状态 |
+|---|---|
+| 生效中的 profile | `%APPDATA%\@deepseek-ai\dsh-desktop`（**隔离时新建的那份**，主驾现在正在用它） |
+| 原主驾 profile | `%APPDATA%\@deepseek-ai\dsh-desktop.main-backup`（完整，Network 停在 11:31） |
+| 保险备份 | `backups\profile-current-20261027-130611`（94 文件 / 15.7 MB） |
+| 独立 home | `E:\SOS-home`（保留，下次测 rc.3 还能用） |
+
+两条路：
+
+1. **换回原来的**（想恢复旧登录态/localStorage）：退出所有 Harness → `-Restore`；当前这份会被留作 `dsh-desktop.rc3`
+2. **就用现在这份**：把 `dsh-desktop.main-backup` 改个名（如 `…-20261027`），否则下次 `-Isolate` 会被它挡住
+
+`-Status` 现在会直接把这段提醒打出来。
+
 
 ## 5. 顺带发现的另一个问题（主驾侧）
 
