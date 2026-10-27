@@ -31,10 +31,22 @@
  *       （它按 `*_panelRow` 动态发现，跨版本都有效）。
  * ────────────────────────────────────────────────────────────────────────── */
 
-/* 1.1 原侧栏 / 空右列不占位 */
-[class*="_sidebarCol"],
+/* 1.1 原侧栏 / 空右列不占位
+ *     **但**：某些版本（0.2.1-rc.3）把「设置」入口放在左栏底部（账号菜单）里，
+ *     左栏一藏，用户就再也打不开设置 → 装上插件也看不到配置界面。
+ *     所以由 JS 判断：找不到"左栏之外的设置入口"时，给 body 加 `wb-keep-sidebar`，
+ *     这条规则就让位（保留左栏）。宁可界面丑一点，也不能把设置弄丢。 */
+body:not(.wb-keep-sidebar) [class*="_sidebarCol"] {
+  display: none !important;
+}
+
 [class*="_rightbarCol"] {
   display: none !important;
+}
+
+/* 1.1b 保留左栏时，顶栏仍然存在，所以左栏要往下让出顶栏高度 */
+body.wb-keep-sidebar [class*="_sidebarCol"] {
+  padding-top: 8px !important;
 }
 
 /* 1.2 frame 可能是 grid（固定列宽 280px），强制 flex 让中列能伸展 */

@@ -126,6 +126,7 @@
         pluginSectionTabs: ((state.uiConfig && state.uiConfig.extra) || []).slice(0, 12),
         selftestHit: state.selftestHit || null,
         settingsOpen: settingsNavVisible(),
+        sidebarKept: Boolean(state.sidebarKept),
         closeDebug: state.closeDebug || null,
         selftestInfo: state.selftestInfo || null,
         selftestRan: Boolean(state.selftestRan),
@@ -433,6 +434,15 @@
   // 而 0.2.1-rc.3 把设置收进了「更多」菜单里（没有独立按钮）。
   // 所以这里先直点，找不到就点「更多」再点里面的设置（2026-10-27 在 rc.3 床上踩到）。
   const openSettingsPanel = () => {
+    // ① 最稳的入口：`[data-slot="settings.launcher"]`（插槽名跨版本稳定）。
+    //    0.2.1-rc.3 把设置入口放在**原版左栏**里（`sidebar.settings` / `settings.launcher`），
+    //    而我们把左栏藏了 → 顶栏也就没有「设置」；直接点这个插槽即可（元素隐藏不影响程序化点击）。
+    const launcher = document.querySelector('[data-slot="settings.launcher"], [data-slot="sidebar.settings"]')
+    if (launcher) {
+      const btn = launcher.closest('button, a, [role="button"]') || launcher
+      try { btn.click(); return true } catch { /* 往下走旧路径 */ }
+    }
+    // ② alpha.1 这类有独立「设置」按钮的版本
     const direct = findButton('设置')
     if (direct) { direct.click(); return true }
     for (const label of ['更多', 'More']) {
@@ -623,12 +633,20 @@
   // ── [F] 布局：把原侧栏藏掉 → 建顶栏 → 给 body 让出 46px ──────────────────
   // 只"藏"不禁用：禁用一个提供服务的插件（如 ui-workspace）会让整页 pending。
   const placeTopbar = () => {
-    // 整条侧栏链路都藏掉（只藏、不禁用插件——禁用一个提供服务的插件会让整页崩）
-    const chain = findSidebarChain()
-    if (chain.length) {
-      for (const el of chain) hide(el)
-      expandMain(chain)
-      state.sidebarHides = chain.length
+    // 整条侧栏链路都藏掉（只藏、不禁用插件——禁用一个提供服务的插件会让整页崩）。
+    // 例外：keepSidebar 模式（设置入口只在左栏里的版本）→ 不藏，否则用户打不开设置。
+    if (!state.sidebarKept) {
+      const chain = findSidebarChain()
+      if (chain.length) {
+        for (const el of chain) hide(el)
+        expandMain(chain)
+        state.sidebarHides = chain.length
+      }
+    } else {
+      // 之前藏过的要还原（用户在同一页面里换了版本/开过别的页面时）
+      for (const el of document.querySelectorAll('.wb-hidden')) {
+        if (!el.closest('#wb-topbar')) { el.classList.remove('wb-hidden'); el.style.removeProperty('display') }
+      }
     }
     refreshTopbar()
     reserveTopSpace()
@@ -706,10 +724,28 @@
 
   // 布局兜底：CSS 已经用后缀选择器做了同样的事，这里只是"CSS 没生效时的保险"。
   // 判断依据是**中列实际宽度**，不依赖任何类名前缀。
+  // 「左栏之外的设置入口」存在吗？0.2.1-alpha.1 有独立设置按钮（存在）；
+  // 0.2.1-rc.3 把设置塞进左栏底部的账号菜单（不存在）→ 这种版本**必须保留左栏**，
+  // 否则用户彻底打不开设置，装上插件也看不到配置界面（2026-10-27 用户实测发现）。
+  const settingsReachableOutsideSidebar = () => {
+    const chain = findSidebarChain()
+    const inside = (el) => chain.some((c) => c.contains(el))
+    const direct = findButton('设置')
+    if (direct && !inside(direct)) return true
+    const slots = Array.from(document.querySelectorAll('[data-slot="settings.launcher"], [data-slot="sidebar.settings"]'))
+    return slots.some((el) => !inside(el) && el.getBoundingClientRect().width > 0)
+  }
+
   const forceLayout = () => {
     const frame = bySuffix('frame')
     const center = bySuffix('centerCol')
     if (!frame || !center) return false
+    // 版本自适应：设置入口只在左栏里 → 保留左栏（顶栏照样在，只是界面不再"极简"）
+    const keepSidebar = !settingsReachableOutsideSidebar()
+    if (keepSidebar !== Boolean(state.sidebarKept)) {
+      state.sidebarKept = keepSidebar
+      document.body.classList.toggle('wb-keep-sidebar', keepSidebar)
+    }
     if (center.getBoundingClientRect().width > window.innerWidth * 0.7) {
       state.layoutOk = true
       return true
@@ -720,7 +756,7 @@
     center.style.setProperty('width', 'auto', 'important')
     center.style.setProperty('max-width', 'none', 'important')
     center.style.setProperty('min-width', '0', 'important')
-    for (const suffix of ['sidebarCol', 'rightbarCol', 'handle']) {
+    for (const suffix of keepSidebar ? ['rightbarCol', 'handle'] : ['sidebarCol', 'rightbarCol', 'handle']) {
       for (const el of allBySuffix(suffix)) el.style.setProperty('display', 'none', 'important')
     }
     state.layoutForced = center.getBoundingClientRect().width
@@ -945,9 +981,114 @@
     // 看不到 selftestHit（2026-10-27 踩过）。
     const SELFTEST = (location.search + location.hash).includes('wb-selftest=')
     if (SELFTEST) {
-      const mode = (location.hash.match(/wb-selftest=([a-z]+)/) || [])[1] || 'settings'
+      const mode = (location.hash.match(/wb-selftest=([a-z-]+)/) || [])[1] || 'settings'
       setTimeout(() => {
         state.selftestRan = true
+        if (mode === 'relocate') {
+          // 实验：把原版左栏里的设置入口整行搬到我们顶栏，再点它，看能不能开设置
+          const slot = document.querySelector('[data-slot="sidebar.settings"]')
+          const row = slot ? (slot.closest('[class*="triggerRow"]') || slot.parentElement) : null
+          const bar = document.getElementById('wb-topbar')
+          state.selftestInfo = { slotFound: Boolean(slot), rowFound: Boolean(row), barFound: Boolean(bar) }
+          if (row && bar) {
+            bar.appendChild(row)
+            state.selftestInfo.moved = true
+            setTimeout(() => {
+              const btn = row.querySelector('button') || row
+              try {
+                btn.click()
+                state.selftestInfo.clicked = true
+              } catch (err) { state.selftestInfo.clickErr = String(err) }
+              setTimeout(() => {
+                const menu = document.querySelector('[role="menu"]')
+                state.selftestInfo.menuAfterClick = Boolean(menu)
+                const texts = menu ? Array.from(menu.querySelectorAll('*')).map((el) => (el.textContent || '').trim()).filter(Boolean).slice(0, 12) : []
+                state.selftestInfo.menuTexts = texts
+                if (menu) {
+                  fetch('/wb-ui/dom', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ kind: 'html', name: 'relocate-menu.html', html: menu.outerHTML }),
+                  }).catch(() => {})
+                }
+              }, 700)
+            }, 200)
+          }
+          return
+        }
+        if (mode === 'launcher') {
+          // 探查 rc.3 的设置入口：它在被隐藏的左栏里，看看元素长什么样、点了会不会开
+          const slot = document.querySelector('[data-slot="settings.launcher"], [data-slot="sidebar.settings"]')
+          const btn = slot ? (slot.closest('button, a, [role="button"]') || slot) : null
+          state.selftestInfo = {
+            slotFound: Boolean(slot),
+            btnTag: btn ? btn.tagName : null,
+            btnClass: btn ? String(btn.className || '').slice(0, 80) : null,
+            btnRect: btn ? [Math.round(btn.getBoundingClientRect().width), Math.round(btn.getBoundingClientRect().height)] : null,
+            slotHtml: slot ? slot.outerHTML.slice(0, 400) : null,
+          }
+          if (btn) {
+            try { btn.click(); state.selftestInfo.clicked = true } catch (err) { state.selftestInfo.err = String(err) }
+          }
+          setTimeout(() => {
+            const dialog = document.querySelector('[role="dialog"], dialog, [class*="overlay"]')
+            state.selftestInfo.dialogAfterClick = Boolean(dialog)
+            if (dialog) {
+              fetch('/wb-ui/dom', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ kind: 'html', name: 'launcher-dialog.html', html: dialog.outerHTML.slice(0, 200000) }),
+              }).catch(() => {})
+            }
+          }, 1200)
+          return
+        }
+        if (mode === 'menu') {
+          // 点「更多」，把弹出的菜单 dom 导出来（rc.3 的设置入口藏在里面）
+          const more = findButton('更多') || findButton('More')
+          if (more) more.click()
+          setTimeout(() => {
+            try {
+              const menu = document.querySelector('[role="menu"], [class*="menu"]')
+              const html = menu ? menu.outerHTML : document.body.innerHTML
+              fetch('/wb-ui/dom', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ kind: 'html', name: 'menu-dump.html', html }),
+              }).catch(() => {})
+            } catch { /* 忽略 */ }
+          }, 700)
+          return
+        }
+        if (mode === 'settings-dump') {
+          openSettingsPanel()
+          setTimeout(() => {
+            try {
+              const anchorEl = Array.from(document.querySelectorAll('div,span,h1,h2,h3'))
+                .find((el) => (el.textContent || '').trim() === '通用设置')
+              let node = anchorEl
+              for (let i = 0; i < 8 && node && node.parentElement; i += 1) node = node.parentElement
+              const html = node ? node.outerHTML : (document.body.innerHTML || '')
+              fetch('/wb-ui/dom', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ kind: 'html', name: 'settings-rc3.html', html }),
+              }).catch(() => {})
+            } catch { /* 忽略 */ }
+          }, 1400)
+          return
+        }
+        if (mode === 'dump') {
+          // 把整页 DOM 导出来（跨版本排查用）：state\dom-full.html
+          try {
+            fetch('/wb-ui/dom', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ kind: 'html', name: 'dom-full.html', html: document.documentElement.outerHTML }),
+            }).catch(() => {})
+          } catch { /* 忽略 */ }
+          return
+        }
         if (mode === 'switch') {
           // 先点插件设置按钮（打开设置弹层），1 秒后再点某个面板入口，
           // 期望：设置被自动关掉（diag 里的 settingsOpen 应为 false）
