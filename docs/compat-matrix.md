@@ -4,6 +4,30 @@
 > 静态判断用 `wb.py preflight --install <目录>`（读 `runtime.json` + 在 `app.asar` 里数标记），
 > 动态确认靠“开来一套床 + 跑 install”。
 
+## 三档结论（`wb.py preflight`）
+
+| 档位 | 含义 | 退出码 | 处置 |
+|---|---|---|---|
+| `compatible` | 服务/槽位/客户端包齐全 | 0 | 正常装 |
+| `degraded` | 能跑，但列出的功能会缺 | 0 | 照装，`install` 会先把降级项打出来 |
+| `incompatible` | 缺注入层或顶栏入口依赖 | 1 | `install` 直接中止（`--force` 可试装） |
+
+阻断项（缺了就是白页）：
+
+- `webServer` —— 注入层与状态面板靠它挂路由
+- `sidebar.panellist` —— 顶栏入口靠它注册
+
+降级项（缺了只是少功能）：
+
+| 缺失 | 影响 |
+|---|---|
+| `sessionController` | 「Harness会话」面板不可用（列表/历史/发送） |
+| `reflect` | 状态面板的「宿主服务」实时枚举不可用（只剩静态快照） |
+| `settings.section` | 插件在设置页里的分区不出现（插件市场等设置入口看不见） |
+
+机器可读：`wb.py preflight --install <目录> --json` →
+`{grade, version, blockers[], degradations[], notes[], checks[], pluginNavigation{present,entryCustomization}}`
+
 ## 已验证
 
 | harness 版本 | 安装位置 | 结论 | 证据 |

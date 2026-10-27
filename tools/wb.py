@@ -1943,66 +1943,126 @@ def _asar_markers(asar: Path, markers: dict[str, bytes]) -> dict[str, int]:
     return out
 
 
-def cmd_preflight(install: str) -> int:
-    """体检：目标 harness 安装能不能挂这套工作台（静态检查，不复制、不启动）。"""
-    head("兼容体检（目标 harness）")
+# PM-06 兼容分级：三档结论 + 每档的降级说明
+PREFLIGHT_BLOCKERS = {
+    "webServer": ("服务 webServer", "注入层和状态面板都靠它挂路由；缺了页面什么都显示不出来"),
+    "sidebar.panellist": ("槽位 sidebar.panellist", "顶栏入口靠它注册；缺了没有工作台入口"),
+}
+PREFLIGHT_DEGRADERS = {
+    "sessionController": ("服务 sessionController", "「Harness会话」面板不可用（列表/历史/发送全废），其余照常"),
+    "reflect": ("服务 reflect", "状态面板的「宿主服务」实时枚举不可用（只能看静态快照）"),
+    "settings.section": ("槽位 settings.section", "插件在设置页里的分区不出现（插件市场等设置入口看不见）"),
+}
+PREFLIGHT_CLIENTS = {
+    "dsh-client-ui-plugin-manager": "插件管理器（提供 pluginNavigation）",
+    "dsh-client-ui-settings-general": "设置-通用（预览说明/设置裁剪补丁落点）",
+    "dsh-client-ui-schedule": "自动化任务（对应 disabled 补丁会被忽略，只打 warning）",
+    "dsh-client-ui-entry-customization": "入口自定义（rc.3 起依赖 pluginNavigation）",
+}
+PREFLIGHT_KNOWN = {"0.2.1-alpha.1", "0.2.1-rc.3"}
+
+
+def _preflight_verdict(install: str) -> dict:
+    """算兼容结论，供 CLI 与 install 门禁共用。返回 {grade, version, blockers, degradations, notes, checks}。"""
     target = Path(install) if install else MAIN_INSTALL
+    out: dict = {"install": str(target), "version": "?", "grade": "incompatible",
+                 "blockers": [], "degradations": [], "notes": [], "checks": []}
     if not valid_install(target):
-        bad(f"不是有效的 harness 安装目录：{target}")
-        return 1
+        out["blockers"].append(f"不是有效的 harness 安装目录：{target}")
+        return out
     rt = target / "resources" / "runtime" / "primary-runtime" / "runtime.json"
-    version = "?"
     try:
-        version = json.loads(rt.read_text(encoding="utf-8-sig")).get("desktopVersion") or "?"
+        out["version"] = json.loads(rt.read_text(encoding="utf-8-sig")).get("desktopVersion") or "?"
     except Exception:
         pass
     asar = target / "resources" / "app.asar"
-    ok(f"安装目录 {target}")
-    ok(f"版本 {version}")
     if not asar.exists():
-        bad("找不到 resources\\app.asar")
-        return 1
+        out["blockers"].append("找不到 resources\\app.asar")
+        return out
 
-    need = {
-        "服务 webServer": b"webServer",
-        "服务 sessionController": b"sessionController",
-        "服务 reflect": b"reflect",
-        "槽位 sidebar.panellist": b"sidebar.panellist",
-        "槽位 settings.section": b"settings.section",
-    }
-    clients = {
-        "插件管理器 dsh-client-ui-plugin-manager": b"dsh-client-ui-plugin-manager",
-        "设置-通用 dsh-client-ui-settings-general": b"dsh-client-ui-settings-general",
-        "自动化 dsh-client-ui-schedule": b"dsh-client-ui-schedule",
-        "入口自定义 dsh-client-ui-entry-customization": b"dsh-client-ui-entry-customization",
-    }
-    marks = _asar_markers(asar, {**need, **clients, "pluginNavigation": b"pluginNavigation"})
+    marks = _asar_markers(asar, {k: k.encode() for k in
+                                 (*PREFLIGHT_BLOCKERS, *PREFLIGHT_DEGRADERS, *PREFLIGHT_CLIENTS, "pluginNavigation")})
     if "__error__" in marks:
-        bad(f"读 asar 失败：{marks['__error__']}")
-        return 1
+        out["blockers"].append(f"读 asar 失败：{marks['__error__']}")
+        return out
 
-    hard_missing, soft_missing = [], []
-    for name in need:
-        hit = marks.get(name, 0) > 0
-        (ok if hit else warn)(f"{name}：{'有' if hit else '没找到'}")
-        if not hit:
-            (hard_missing if name in ("服务 webServer", "槽位 sidebar.panellist") else soft_missing).append(name)
-    for name in clients:
-        hit = marks.get(name, 0) > 0
-        info(f"{name}：{'有' if hit else '无'}")
+    for key, (label, impact) in PREFLIGHT_BLOCKERS.items():
+        present = marks.get(key, 0) > 0
+        out["checks"].append({"key": key, "label": label, "present": present, "level": "blocker", "impact": impact})
+        if not present:
+            out["blockers"].append(f"{label} 缺失 —— {impact}")
+    for key, (label, impact) in PREFLIGHT_DEGRADERS.items():
+        present = marks.get(key, 0) > 0
+        out["checks"].append({"key": key, "label": label, "present": present, "level": "degradation", "impact": impact})
+        if not present:
+            out["degradations"].append(f"{label} 缺失 —— {impact}")
+    for key, label in PREFLIGHT_CLIENTS.items():
+        present = marks.get(key, 0) > 0
+        out["checks"].append({"key": key, "label": label, "present": present, "level": "client", "impact": ""})
+
+    has_pn = marks.get("pluginNavigation", 0) > 0
+    has_ec = marks.get("dsh-client-ui-entry-customization", 0) > 0
+    out["pluginNavigation"] = {"present": has_pn, "entryCustomization": has_ec}
+    if has_pn and has_ec:
+        out["notes"].append("该版本的「入口自定义」依赖 pluginNavigation → 补丁里必须保留 ui-plugin-manager"
+                            "（当前已保留；若禁用会让客户端整页报 Failed to load plugins，rc.3 上踩过）")
+    elif has_pn:
+        out["notes"].append("该版本有 pluginNavigation 但无「入口自定义」依赖 → 禁用插件管理器也不会炸（alpha.1 就是这样）")
+    if out["version"] not in PREFLIGHT_KNOWN:
+        out["notes"].append(f"{out['version']} 不在已验证清单（{'/'.join(sorted(PREFLIGHT_KNOWN))}）里："
+                            "静态检查只能保证接口在，实际表现要跑一次 install + 开页面确认")
+
+    if out["blockers"]:
+        out["grade"] = "incompatible"
+    elif out["degradations"]:
+        out["grade"] = "degraded"
+    else:
+        out["grade"] = "compatible"
+    return out
+
+
+def cmd_preflight(install: str, as_json: bool = False) -> int:
+    """体检：目标 harness 安装能不能挂这套工作台（静态检查，不复制、不启动）。
+
+    三档结论：compatible（能用）/ degraded（能跑但有功能降级）/ incompatible（装不了）。
+    """
+    v = _preflight_verdict(install)
+    if as_json:
+        print(json.dumps(v, ensure_ascii=False))
+        return 0 if v["grade"] != "incompatible" else 1
+
+    head("兼容体检（目标 harness）")
+    ok(f"安装目录 {v['install']}")
+    ok(f"版本 {v['version']}")
+    if any(c["level"] == "blocker" and c["key"] == "app.asar" for c in v["checks"]):
+        pass
+    for c in v["checks"]:
+        if c["level"] == "client":
+            # 客户端包只是"有/没有"，缺了不影响能不能跑
+            info(f"{c['label']}：{'有' if c['present'] else '无（该版本没有，不影响跑）'}")
+        elif c["present"]:
+            ok(f"{c['label']}：有")
+        elif c["level"] == "blocker":
+            bad(f"{c['label']}：没找到")
+        else:
+            warn(f"{c['label']}：没找到")
 
     head("结论")
-    if hard_missing:
-        bad(f"不兼容：缺少 {', '.join(hard_missing)}——这套插件（注入层/面板）挂不上去")
+    grade = v["grade"]
+    if grade == "incompatible":
+        for b in v["blockers"]:
+            bad(b)
+        bad("不兼容：这套工作台装不上（装了也是白页）")
         return 1
-    if soft_missing:
-        warn(f"可跑但要留意：{', '.join(soft_missing)} 没找到（相关功能会降级）")
-    if marks.get("pluginNavigation", 0) > 0 and marks.get("入口自定义 dsh-client-ui-entry-customization", 0) > 0:
-        warn("该版本里「入口自定义」依赖 pluginNavigation：补丁里**不要**禁用 ui-plugin-manager，"
-             "否则客户端整页报 Failed to load plugins（rc.3 上踩过）")
-    elif marks.get("pluginNavigation", 0) > 0:
-        info("该版本有 pluginNavigation，但没有「入口自定义」依赖它 → 禁用 ui-plugin-manager 也不会炸（alpha.1 就是这种）")
-    ok(f"这套工作台可以装在 {version} 上（静态检查通过；动态仍需跑一次 install 验证）")
+    for d in v["degradations"]:
+        warn(f"降级：{d}")
+    for n in v["notes"]:
+        info(n)
+    if grade == "degraded":
+        warn(f"可跑但有降级：{v['version']} 上 {len(v['degradations'])} 项功能会缺（见上）")
+        warn("装法一样：wb.py paths --install <该目录> 然后 wb.py install")
+        return 0
+    ok(f"兼容：这套工作台可以完整跑在 {v['version']} 上（静态检查通过；动态仍需 install + 开页面确认）")
     info("下一步：wb.py paths --install <该目录> 然后 wb.py install")
     return 0
 
@@ -2414,9 +2474,18 @@ def cmd_install(force: bool = False) -> int:
 
     # 门禁：目标 harness 版本如果不满足要求，装了也是白页 → 先拦下来（--force 可越过）
     if not force:
-        if cmd_preflight(str(MAIN_INSTALL)) != 0:
-            bad("目标 harness 版本不满足要求，安装中止（确要试装加 --force）")
+        verdict = _preflight_verdict(str(MAIN_INSTALL))
+        if verdict["grade"] == "incompatible":
+            bad("目标 harness 不兼容，安装中止：")
+            for b in verdict["blockers"]:
+                bad(f"  · {b}")
+            bad("确要试装请加 --force")
             return 1
+        if verdict["grade"] == "degraded":
+            warn(f"目标 harness {verdict['version']} 能跑但有降级：")
+            for d in verdict["degradations"]:
+                warn(f"  · {d}")
+            info("（继续安装；这些功能在该版本上会缺失）")
 
     if force or not APP_DSH_CMD.exists():
         if cmd_sync_app(force) != 0:
@@ -3522,7 +3591,7 @@ def main(argv: list[str]) -> int:
         "restart-safe": lambda: cmd_restart_safe(),
         "start-safe": lambda: cmd_start_safe(),
         "registry": lambda: cmd_registry(args.force),
-        "preflight": lambda: cmd_preflight(args.install or ""),
+        "preflight": lambda: cmd_preflight(args.install or "", args.as_json),
         "sync-bed": lambda: cmd_sync_bed(args.out or (args.rest[0] if args.rest else (args.sub or ""))),
         "plugin-search": lambda: cmd_plugin_search(
             (args.rest[0] if args.rest else (args.sub or "")), args.n),
