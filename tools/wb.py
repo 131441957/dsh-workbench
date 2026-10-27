@@ -557,16 +557,22 @@ def cmd_plugins(action: str = "list", spec: str = "", bundle: str = "") -> int:
             name = name or meta.get("name", src.name)
             deps[name] = "link:" + src.as_posix()
         else:
-            name = name or spec
-            # 依赖值必须是版本/标签：裸包名先查 npm 拿确切版本，查不到就退 latest
-            tail = spec.split("/")[-1]
-            if re.search(r"[@^~><=*]", tail) or spec.startswith(("file:", "link:", "github:", "http")):
-                value = spec
+            # 名字和版本要分开：`dshmarket@1.71.1` 的依赖名是 dshmarket、值是 1.71.1。
+            # 以前整串当成了名字 → pnpm 报 ERR_PNPM_INVALID_DEPENDENCY_NAME。
+            pkg, ver = split_npm_spec(spec)
+            name = bundle or pkg
+            if ver:
+                value = ver
+                ok(f"锁定版本：{name}@{value}")
             else:
-                ver = npm_latest_version(spec)
-                value = ver or "latest"
-                if ver:
-                    ok(f"npm 最新版本：{spec}@{ver}")
+                # 优先用注册表缓存里的版本（离线可用），没有再问 npm，最后退 latest
+                item = registry_lookup(pkg)
+                resolved = str(item.get("version")) if item and item.get("version") else ""
+                if not resolved:
+                    resolved = npm_latest_version(pkg) or ""
+                value = resolved or "latest"
+                (ok if resolved else warn)(
+                    f"版本：{name}@{value}" + ("" if resolved else "（没查到确切版本，写成 latest）"))
             deps[name] = value
         if name not in bundles:
             bundles.append(name)
@@ -887,14 +893,15 @@ def pkg_dir_of(name: str) -> Path:
 
 
 def normalize_pkg_name(spec: str) -> str:
-    """目录 → 取它的 package.json name；包名 → 原样。"""
+    """目录 → 取它的 package.json name；`name@ver` → 只留 name；纯包名原样。"""
     p = Path(spec)
     if p.exists() and (p / "package.json").exists():
         try:
             return str(json.loads((p / "package.json").read_text(encoding="utf-8")).get("name") or spec).strip()
         except Exception:
             return spec
-    return spec.strip()
+    pkg, _ver = split_npm_spec(spec)
+    return pkg.strip()
 
 
 def pre_install_snapshot() -> Path:
@@ -1799,6 +1806,120 @@ def cmd_registry(refresh: bool = False) -> int:
     except Exception as exc:  # noqa: BLE001
         warn(f"拉注册表失败（离线也能用，只是没有搜索/能力信息）：{exc}")
         return 1
+
+
+def split_npm_spec(spec: str) -> tuple[str, str]:
+    """把 `name@1.2.3` / `@scope/name@1.2.3` 拆成 (名字, 版本)；本地/URL 原样返回。"""
+    if spec.startswith(("file:", "link:", "github:", "http", "git+")):
+        return spec, ""
+    if spec.startswith("@"):
+        scope, _, rest = spec.partition("/")
+        if "@" in rest:
+            pkg, _, ver = rest.rpartition("@")
+            return f"{scope}/{pkg}", ver
+        return spec, ""
+    if "@" in spec:
+        name, _, ver = spec.rpartition("@")
+        return name, ver
+    return spec, ""
+
+
+def registry_items() -> list[dict]:
+    data = registry_load()
+    items = data.get("items")
+    return items if isinstance(items, list) else []
+
+
+def registry_lookup(name: str) -> dict | None:
+    """按 npm 包名（或短名）在注册表里找一条。"""
+    for item in registry_items():
+        if not isinstance(item, dict):
+            continue
+        if item.get("npm") == name or item.get("name") == name:
+            return item
+    return None
+
+
+def _desc_of(item: dict) -> str:
+    d = item.get("description")
+    if isinstance(d, dict):
+        return str(d.get("zh") or d.get("en") or "").strip()
+    return str(d or "").strip()
+
+
+def cmd_plugin_search(query: str, limit: int = 20) -> int:
+    """在社区注册表里搜插件（离线则提示先 wb.py registry --refresh）。"""
+    if not query:
+        bad("用法：wb.py plugin-search <关键词> [--limit N]")
+        return 2
+    items = registry_items()
+    if not items:
+        bad("还没有注册表缓存：先跑 wb.py registry --refresh")
+        return 1
+    q = query.lower()
+    hits = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        blob = " ".join(str(item.get(k) or "") for k in ("name", "npm", "category")) + " " + _desc_of(item)
+        if q in blob.lower():
+            hits.append(item)
+    hits.sort(key=lambda x: int(x.get("downloads") or 0), reverse=True)
+    head(f"搜索结果：{query}（{len(hits)} 条，显示前 {min(limit, len(hits))}）")
+    if not hits:
+        warn("没找到；换个关键词，或先 wb.py registry --refresh 更新缓存")
+        return 0
+    installed = set(_bench_deps().keys())
+    for item in hits[:limit]:
+        npm = str(item.get("npm") or item.get("name") or "")
+        mark = "已装" if npm in installed else "   "
+        caps = item.get("capabilities") or []
+        risky = [c for c in caps if c in ("credentials", "fs-write", "network", "shell", "dynamic-code")]
+        info(f"[{mark}] {npm}  v{item.get('version', '?')}  ↓{item.get('downloads', 0)}  "
+             f"{'⚠' + ','.join(risky) if risky else '能力: ' + (','.join(caps) if caps else '无')}")
+        desc = _desc_of(item)
+        if desc:
+            info(f"        {desc[:96]}")
+    info("安装：wb.py install-plugin <npm 包名>")
+    return 0
+
+
+def cmd_plugin_update(name: str = "", apply: bool = False) -> int:
+    """检查（并可升级）已装插件到注册表里的最新版本。"""
+    items = registry_items()
+    if not items:
+        bad("还没有注册表缓存：先跑 wb.py registry --refresh")
+        return 1
+    deps = _bench_deps()
+    rows = []
+    for pkg, spec in deps.items():
+        if pkg.startswith("@deepseek-ai/"):      # 内置，别动
+            continue
+        if str(spec).startswith("link:"):        # 本地自研，没有"新版本"概念
+            continue
+        item = registry_lookup(pkg)
+        if not item:
+            continue
+        installed_version = _pkg_version(pkg_dir_of(pkg))
+        latest = str(item.get("version") or "")
+        if latest and installed_version and latest != installed_version:
+            rows.append((pkg, installed_version, latest))
+    head("插件更新检查")
+    if not rows:
+        ok("已装插件都是最新（或注册表里查不到更新）")
+        return 0
+    for pkg, cur, new in rows:
+        info(f"{pkg}: {cur} → {new}")
+    if not apply:
+        info("升级一个：wb.py plugin-update <包名> --apply（会走装前快照 + 验证 + 失败回滚）")
+        return 0
+    targets = [r for r in rows if (not name or r[0] == name)]
+    if not targets:
+        bad(f"没有可升级的条目匹配 {name}")
+        return 1
+    pkg, cur, new = targets[0]
+    warn(f"开始升级 {pkg}: {cur} → {new}（失败会自动回滚）")
+    return cmd_install_plugin(f"{pkg}@{new}", "", False)
 
 
 def current_url() -> str | None:
@@ -3205,6 +3326,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--json", dest="as_json", action="store_true")
     ap.add_argument("--refresh", dest="force", action="store_true")
     ap.add_argument("-n", type=int, default=40)
+    ap.add_argument("--limit", dest="n", type=int)
     args = ap.parse_args(argv[1:])
 
     # 除 watchdog 外，所有命令先确定路径（自动识别 + config.json 缓存）
@@ -3258,6 +3380,10 @@ def main(argv: list[str]) -> int:
         "restart-safe": lambda: cmd_restart_safe(),
         "start-safe": lambda: cmd_start_safe(),
         "registry": lambda: cmd_registry(args.force),
+        "plugin-search": lambda: cmd_plugin_search(
+            (args.rest[0] if args.rest else (args.sub or "")), args.n),
+        "plugin-update": lambda: cmd_plugin_update(
+            (args.rest[0] if args.rest else (args.sub or "")), args.apply),
         "logs": lambda: cmd_logs(args.n),
         "watchdog": lambda: cmd_watchdog([int(x) for x in args.main_pids.split(",") if x.strip()]),
     }

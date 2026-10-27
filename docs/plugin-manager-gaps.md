@@ -17,9 +17,9 @@
 | PM-02 | 装前不打快照、装崩不自动回滚 | `cmd_install_plugin` 只验证，无 backup/restore | 一次装崩要人工 `plugins remove` + 恢复，耗时且易错 | 装前存三件套（profile `package.json` + `pnpm-lock.yaml` + `ui-config.json` + 台账），验证不过自动还原并重装 | **已完成（2026-10-27）**：`backups\pre-install-<时间>\`；端口没起/插件未登记链接 → 自动回滚 |
 | PM-03 | 没有安全模式 | `wb.py start` 只能全量启动 | 插件把 webServer 搞挂 = 界面打不开，只能命令行救 | `wb.py start-safe`：按每个第三方插件的 `cordis.patch.yml` 抠出 entry id，生成**一次性** `state\safe-mode.patch.yml`（`--patch` 叠加，不写 profile），只禁用第三方、保留内置与自研三个 → 界面能开；退出用 `wb.py restart-safe` | **已完成（2026-10-27）**：实测禁用 `dsh-market` 后页面正常（标题/两个界面插件都在、market 缺席），`restart-safe` 后 market 回归 |
 | PM-04 | `keepNav` 只增不删 | 原来只有 append | 卸载后白名单残留 | `ui-config.json` 里记 `navByPlugin`（哪个插件写的），`uninstall-plugin` 按插件清 | **已完成（2026-10-27）**：卸载实测清掉「测试分区」 |
-| PM-05 | 装的是 `latest`，不锁版本；无安装台账 | profile 里写 `"latest"` | 复现/排障无法知道"当时装的是哪个版本" | `state\installed.json` 记 包名/版本/来源/时间/客户端入口/槽位 | 部分（台账已有并含实际版本；profile 仍写 `latest`，未锁死） |
+| PM-05 | 装的是 `latest`，不锁版本；无安装台账 | profile 里写 `"latest"` | 复现/排障无法知道"当时装的是哪个版本" | 新装/升级时把**确切版本**写进 profile（优先注册表缓存，其次 npm，都没有才退 latest 并警告）；`state\installed.json` 记 包名/版本/来源/时间/客户端入口/槽位 | **已完成（2026-10-27）**：升级 dshmarket 后 profile 里是 `1.71.1`，面板 `source: dshmarket@1.71.1` |
 | PM-06 | 没有装前兼容预判 | 只能运行期撞；`dshmarket` 声明 peer 最低 `0.2.1-alpha.3` 却在 `0.2.1-alpha.1` 上能跑 | 预判过严会误杀，过宽会撞崩 | `plugin-info` 里做 semver 比对，输出三档结论 | 部分（有侦察，无结论分级） |
-| PM-07 | 无搜索、无更新检查 | 只能按确切包名装 | 市场里 7211 个插件只能靠外部翻 | `plugin-search <关键词>` 读注册表缓存；`plugin-update` 对比已装版本 | **部分（2026-10-27）**：注册表缓存与「可升级」提示已就绪（`wb.py registry [--refresh]` → `state\registry.json`；面板显示 `可升级 1.70.2→1.71.1`）；还差 `plugin-search` / `plugin-update` 两个命令 |
+| PM-07 | 无搜索、无更新检查 | 只能按确切包名装 | 市场里 7211 个插件只能靠外部翻 | `plugin-search <关键词>` 读注册表缓存；`plugin-update [<包名>] --apply` 对比并升级（复用装前快照/验证/回滚） | **已完成（2026-10-27）**：搜索命中 353 条按下载量排序带能力标记；`plugin-update` 从 `1.70.2 → 1.71.1` 真升级成功（升级前后 `--apply` 各踩一坑，见下） |
 | PM-08 | 卸载不清 `node_modules` | pnpm 不剪（`dsh-wb-web` 那次是手动 `rmdir`） | 残留死链，`linked` 状态会骗人 | 卸载后删包目录 + 空的 scope 目录 | **已完成（2026-10-27）**：实测连 `@240xu` 空 scope 一起清 |
 | PM-09 | 插件面板信息太薄 | 只有 名称 / 版本 / 是否登记 / 是否链接 + 备注 | 看不出「来源、声明能力、上次验证时间、可升级」 | 面板加列：来源、能力徽章（`credentials`/`fs-write` 这类标 ⚠，来自社区注册表）、上次验证、可升级版本 | **已完成（2026-10-27）**：`/wb-api/plugins` 合并「台账 + 注册表缓存」；面板实测显示 `来源 … · 能力 shell/dynamic-code/fs-write/… ⚠ · 上次验证 10-27 12:02 · 可升级 1.70.2→1.71.1` |
 | PM-10 | **客户没法自助备份/还原**：安装器只有「回滚运行时」（那是 app 副本），没有备份/还原快照的入口 | `wb_gui.py` 原按钮表只有 install/rollback/start/stop… | 客户出问题时只能找我们 | 安装器加「立即备份…」「快照列表」「还原快照…」+ 还原后询问「安全重启」；`wb.py backups --json` 给界面机器可读出口；`wb.py restart-safe` 走维护模式重启 | **已完成（2026-10-27）**：GUI 截图确认按钮在位；备份→破坏→还原演练通过（css 哈希回到基线、被删插件文件恢复、运行时健康） |
@@ -48,6 +48,15 @@
 5. 其余（PM-03/05 锁版本/06/07/09、DIST-05）
 
 > 备注（2026-10-27）：做 1、2 时发现「重启抢端口」的真凶不是 `restart` 本身，而是**supervisor 看到端口空出来就抢先起实例**。所以维护型重启必须走「suspend → 等端口释放 → start → resume」（`wb.py` 里的 `safe_restart`），否则日志里永远有 EADDRINUSE 假故障。
+
+## 5. 升级演练踩的两个坑（2026-10-27）
+
+`plugin-update dshmarket --apply`（1.70.2 → 1.71.1）第一次、第二次都失败了，但**两次回滚都干净**（profile 回到 `latest`、实际版本仍是 1.70.2、工作台照常跑）。第三次成功。
+
+1. **`name@version` 被当成依赖名**：`cmd_plugins add` 老逻辑把 `dshmarket@1.71.1` 整串写进 `dependencies` 的键 → pnpm 报 `ERR_PNPM_INVALID_DEPENDENCY_NAME`。修：新增 `split_npm_spec()` 拆「名字 / 版本」，并把版本当值写入（顺带实现锁定版本）。
+2. **验证阶段用整串当插件名**：`normalize_pkg_name()` 对 `dshmarket@1.71.1` 原样返回 → 去 `node_modules/dshmarket@1.71.1` 找目录找不到 → 判失败并回滚。修：`normalize_pkg_name()` 也走 `split_npm_spec()`，只留包名。
+
+教训：**升级路径和安装路径必须共用同一套"名字规范化"**，否则一个按裸名、一个按带版本号，就会互相拆台；而且这类错误会被"验证失败→自动回滚"掩盖成"升级就是不成功"，必须看日志里的 `找不到目录 / 清单里没有` 才能定位。
 
 ## 6. 空环境验收（2026-10-27 首轮）
 
@@ -85,7 +94,7 @@
 另加 `DSH_WB_NO_SHORTCUTS=1`：演练/CI/批量部署时不动用户桌面与开机启动项。
 
 
-## 5. 验收标准（怎么算做完）
+## 7. 验收标准（怎么算做完）
 
 - 装一个插件：一条命令，装前有快照，装后自动验证，失败自动回滚，台账里有记录
 - 卸一个插件：一条命令，白名单/`node_modules`/台账三处都干净
