@@ -386,6 +386,11 @@ def port_open(port: int, timeout: float = 0.3) -> bool:
 
 
 def main_harness_ports() -> list[int]:
+    """主驾（桌面壳）在听的端口。
+
+    ⚠️ 进程名是同一个（DeepSeek Harness.exe），工作台/测试床的 headless 进程也叫这个名字，
+    所以必须按**可执行路径**把工作台自己的进程剔掉，否则会把 59430/59480 当主驾端口。
+    """
     env_url = os.environ.get("DSH_WEB_URL", "")
     if ":" in env_url:
         tail = env_url.rsplit(":", 1)[-1].split("/")[0]
@@ -394,13 +399,23 @@ def main_harness_ports() -> list[int]:
     try:
         ps = subprocess.run(
             ["powershell", "-NoProfile", "-Command",
-             "(Get-Process -Name 'DeepSeek Harness' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id) -join ','"],
-            capture_output=True, text=True, timeout=20, creationflags=RUNFLAGS,
+             "Get-CimInstance Win32_Process -Filter \"Name = 'DeepSeek Harness.exe'\" | "
+             "ForEach-Object { '{0}|{1}' -f $_.ProcessId, $_.ExecutablePath }"],
+            capture_output=True, text=True, timeout=25, creationflags=RUNFLAGS,
             encoding="utf-8", errors="replace",
-        ).stdout.strip()
-        app_pids = {int(x) for x in ps.split(",") if x.strip().isdigit()}
+        ).stdout
     except Exception:
-        app_pids = set()
+        return []
+    app_pids: set[int] = set()
+    for line in (ps or "").splitlines():
+        pid_s, _, path = line.strip().partition("|")
+        if not pid_s.strip().isdigit():
+            continue
+        # 只认"安装目录里的 exe"：排除任何工作台根（本工作台、测试床）
+        low = path.lower().replace("/", "\\")
+        if "\\dsh-workbench\\app\\" in low or "\\wb-" in low:
+            continue
+        app_pids.add(int(pid_s.strip()))
     if not app_pids:
         return []
     return sorted({p for p, pid in netstat_listen() if pid in app_pids and p not in RESERVED_PORTS})
