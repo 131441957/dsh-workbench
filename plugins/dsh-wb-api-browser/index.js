@@ -10,7 +10,7 @@ export const inject = ['webServer']
 const PREFIX = '/wb-api'
 
 // 自己的根目录：优先环境变量，其次从本文件位置推导（plugins/<name>/index.js → 上两级）。
-// 别写死 E:\DSH-WORKBENCH：同一台机器上可以有多套工作台（例如 rc.3 验收床）。
+// 别写死路径：同一台机器上可以有多套工作台（例如 rc.3 验收床）。
 const PLUGIN_DIR = fileURLToPath(new URL('.', import.meta.url))
 const WB_ROOT = process.env.DSH_WORKBENCH_ROOT || join(PLUGIN_DIR, '..', '..')
 
