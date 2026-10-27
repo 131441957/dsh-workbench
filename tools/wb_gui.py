@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """wb_gui.py — 工作台安装器（可视化）
 
-用户自己点的安装/修复/启停工具，不隐藏任何动作：
+用户自己点的安装/修复/启停/备份还原工具，不隐藏任何动作：
   · 安装 / 修复        → 跑 wb.py install（幂等）
   · 同步运行时(重装)    → wb.py install --force（旧运行时改名备份，可回滚）
-  · 回滚运行时          → wb.py rollback
+  · 回滚运行时          → wb.py rollback（只换 app/ 这份运行时副本）
+  · 立即备份 / 快照列表 / 还原快照 → wb.py backup / backups / restore
   · 启动 / 停止 / 打开页面 / 暂停守护 / 恢复守护
   · 看日志
 
@@ -22,7 +23,7 @@ import threading
 import time
 import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox, scrolledtext, ttk
+from tkinter import messagebox, scrolledtext, simpledialog, ttk
 
 WB_ROOT = Path(os.environ.get("DSH_WORKBENCH_ROOT") or Path(__file__).resolve().parent.parent)
 WB_PY = WB_ROOT / "tools" / "wb.py"
@@ -69,6 +70,7 @@ class App:
         self.root = root
         self.log_queue: queue.Queue[str] = queue.Queue()
         self.worker: threading.Thread | None = None
+        self._pending_restart = False
 
         root.title("DSH 工作台 安装器")
         root.geometry("820x560")
@@ -84,6 +86,9 @@ class App:
         self.detail_label.pack(anchor="w", pady=(2, 0))
         self.paths_label = ttk.Label(top, text="路径探测中…", foreground="#3a6", font=("Consolas", 9))
         self.paths_label.pack(anchor="w", pady=(2, 0))
+        # 构建信息：一眼看出这个安装器是不是旧版（客户排障时最常问的一句）
+        self.build_label = ttk.Label(top, text=self.build_text(), foreground="#888", font=("Consolas", 8))
+        self.build_label.pack(anchor="w", pady=(2, 0))
 
         btns = ttk.Frame(root, padding=(12, 6))
         btns.pack(fill="x")
@@ -91,6 +96,9 @@ class App:
             ("安装 / 修复", ["install"]),
             ("同步运行时（复制主驾安装）", ["install", "--force"]),
             ("回滚运行时", ["rollback"]),
+            ("立即备份…", ["backup"]),
+            ("快照列表", ["backups"]),
+            ("还原快照…", ["restore"]),
             ("启动工作台", ["start"]),
             ("停止工作台", ["stop"]),
             ("打开页面", ["page"]),
@@ -111,6 +119,71 @@ class App:
         self.root.after(100, self.pump)
         self.refresh_status()
 
+    # ── 构建信息 / 备份还原 ─────────────────────────────────────────
+    @staticmethod
+    def build_text() -> str:
+        ver = "源码工作区"
+        try:
+            vf = WB_ROOT / "VERSION"
+            dist_dir = WB_ROOT / "dist"
+            if vf.exists():
+                ver = vf.read_text(encoding="utf-8-sig").strip() or ver
+            elif dist_dir.exists():
+                names = sorted(p.name for p in dist_dir.glob("DSH-Workbench-*"))
+                if names:
+                    ver = "分发包 " + names[-1].replace("DSH-Workbench-", "")
+        except Exception:
+            pass
+        try:
+            mt = time.strftime("%Y-%m-%d %H:%M", time.localtime((WB_ROOT / "tools" / "wb.py").stat().st_mtime))
+        except Exception:
+            mt = "?"
+        return f"构建：{ver}    wb.py 更新于 {mt}    根目录 {WB_ROOT}"
+
+    def snapshots(self) -> list[dict]:
+        try:
+            proc = subprocess.run([python_console(), str(WB_PY), "backups", "--json"], capture_output=True,
+                                  text=True, encoding="utf-8", errors="replace", timeout=120,
+                                  creationflags=0x08000000)
+            for line in reversed((proc.stdout or "").splitlines()):
+                if line.strip().startswith("{"):
+                    return json.loads(line).get("items") or []
+        except Exception as exc:  # noqa: BLE001
+            self.write(f"读快照列表失败：{exc}")
+        return []
+
+    def choose_snapshot(self) -> str | None:
+        items = self.snapshots()
+        if not items:
+            messagebox.showinfo("没有快照", "还没有任何快照。先点「立即备份…」做一份。")
+            return None
+        win = tk.Toplevel(self.root)
+        win.title("选择要还原的快照")
+        win.geometry("780x380")
+        win.transient(self.root)
+        ttk.Label(win, wraplength=740, justify="left", foreground="#a33",
+                  text="还原会用快照覆盖：tools / plugins / ui / docs / seeds / profile 清单。\n"
+                       "不动 app/（运行时）与 home/ 里的会话数据。还原后建议重启工作台。").pack(anchor="w", padx=10, pady=(10, 4))
+        box = tk.Listbox(win, font=("Consolas", 9))
+        box.pack(fill="both", expand=True, padx=10, pady=4)
+        for it in items:
+            box.insert("end", f"{it['name']}   {it['kb']} KB   {it['time']}   {it['note'][:48]}")
+        box.selection_set(0)
+        chosen: dict[str, str | None] = {"value": None}
+
+        def ok() -> None:
+            sel = box.curselection()
+            if sel:
+                chosen["value"] = items[sel[0]]["name"]
+                win.destroy()
+
+        row = ttk.Frame(win)
+        row.pack(fill="x", padx=10, pady=(0, 10))
+        ttk.Button(row, text="还原选中的", command=ok).pack(side="left")
+        ttk.Button(row, text="取消", command=win.destroy).pack(side="left", padx=6)
+        self.root.wait_window(win)
+        return chosen["value"]
+
     # ── 日志 / 动作 ────────────────────────────────────────────────
     def write(self, text: str) -> None:
         self.log.insert("end", text if text.endswith("\n") else text + "\n")
@@ -128,6 +201,27 @@ class App:
         if self.worker and self.worker.is_alive():
             messagebox.showinfo("正在忙", "上一个操作还没结束，等它跑完。")
             return
+        # 「立即备份…」：问一句备注再跑
+        if args == ["backup"]:
+            note = simpledialog.askstring("备份备注", "给这次快照写个备注（可留空）：", parent=self.root)
+            if note is None:
+                self.write("已取消备份。")
+                return
+            args = ["backup", "--note", note.strip() or "手动备份（安装器）"]
+        # 「还原快照…」：选一份 + 二次确认
+        if args == ["restore"]:
+            name = self.choose_snapshot()
+            if not name:
+                return
+            if not messagebox.askyesno(
+                "确认还原",
+                f"用这份快照覆盖当前的 tools / plugins / ui / docs / seeds 与 profile 清单？\n\n    {name}\n\n"
+                "app/（运行时）和 home/（会话数据）不会被动。",
+            ):
+                self.write("已取消还原。")
+                return
+            args = ["restore", "--from", name]
+            self._pending_restart = True
         if args == ["install", "--force"]:
             if not messagebox.askyesno(
                 "确认同步运行时",
@@ -154,6 +248,12 @@ class App:
             self.log_queue.put(f"执行失败：{exc}")
         finally:
             self.root.after(300, self.refresh_status)
+            if self._pending_restart:
+                # 还原之后：宿主/插件代码可能换过了，问一句要不要安全重启
+                self._pending_restart = False
+                if messagebox.askyesno("还原完成", "快照已还原。要现在「安全重启」工作台让改动生效吗？\n\n"
+                                                   "（安全重启会先暂停自动伴随，避免端口抢占）"):
+                    self.run_action("安全重启", ["restart-safe"])
 
     def refresh_status(self) -> None:
         def work() -> None:

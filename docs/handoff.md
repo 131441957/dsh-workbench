@@ -46,6 +46,20 @@ python tools\wb.py detach --target-home <…> --apply                           
 - 装/卸都要**重启目标 harness** 才生效（桥是 host 代码）。
 - 演练办法（别拿真主 profile 试）：在 `state\` 下造一个假 home（`profiles\desktop\package.json` 带最小 bundles），用 `--target-home` 指过去走完整链路。
 
+## 客户自助备份 / 还原（2026-10-27）
+安装器（`tools\wb_gui.py`，桌面「DSH 工作台 安装器」）现在有：
+- **立即备份…**（问一句备注）→ `wb.py backup --note …`
+- **快照列表** → `wb.py backups`（界面读的是 `backups --json`，不解析人类可读输出）
+- **还原快照…**（列表里选一份 + 二次确认）→ `wb.py restore --from <名字>`，还原完会问「要现在安全重启吗」
+- 顶部多一行**构建信息**：`构建：分发包 0.1.0-<日期> / 源码工作区 · wb.py 更新于 … · 根目录 …`——客户排障时先看这行，能确认安装器是不是旧版
+
+配套命令：
+- `wb.py backups --json`：机器可读快照列表（`items[{name,kb,time,note}]`）
+- `wb.py restart-safe`：维护模式重启（suspend → 等端口释放 → start → resume），GUI 用它，避免抢端口假故障
+
+演练（2026-10-27 实测）：先做基线快照 → 追加一行到 `ui\workbench.css` + 删掉 `plugins\dsh-wb-ui\index.js` → `restore --from <基线>` → css 哈希回到基线、插件文件恢复、`/wb-ui` 与插件清单正常。
+> 顺序不能反：**必须先打基线快照再破坏**（先破坏再备份等于把坏状态存进去）。还原会连代码一起回滚——所以修完代码要重打基线，旧快照是陷阱。
+
 ## 分发给客户（2026-10-27）
 ```powershell
 python tools\wb.py pack            # → dist\DSH-Workbench-<版本>\（含 README/MANIFEST）

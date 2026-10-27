@@ -673,6 +673,14 @@ def http_json(url: str, timeout: float = 10.0):
         return json.loads(resp.read().decode("utf-8", "replace"))
 
 
+def cmd_restart_safe() -> int:
+    """维护模式重启（suspend → 等端口释放 → start → resume），供 GUI/客户用。"""
+    head("安全重启工作台（维护模式）")
+    ok_flag = safe_restart()
+    (ok if ok_flag else bad)(f"工作台{'已就绪' if ok_flag else '没起来，看日志'}")
+    return 0 if ok_flag else 1
+
+
 def cmd_plugin_info(name: str) -> int:
     """只看不装：这个插件会露在哪个槽位、有没有设置分区、peer 约束是什么。"""
     if not name:
@@ -2133,7 +2141,7 @@ def cmd_backup(note: str = "") -> int:
     return 0
 
 
-def cmd_backups() -> int:
+def cmd_backups(as_json: bool = False) -> int:
     head("已有快照")
     if not BACKUP_ROOT.exists():
         warn("还没有快照：wb.py backup")
@@ -2142,6 +2150,7 @@ def cmd_backups() -> int:
     if not items:
         warn("还没有快照")
         return 0
+    rows = []
     for p in items:
         note = ""
         try:
@@ -2149,7 +2158,20 @@ def cmd_backups() -> int:
                 note = json.loads(zf.read("MANIFEST.json").decode("utf-8")).get("note", "")
         except Exception:
             pass
-        info(f"{p.name}  {p.stat().st_size / 1024:.1f} KB  {time.strftime('%Y-%m-%d %H:%M', time.localtime(p.stat().st_mtime))}  {note}")
+        rows.append({
+            "name": p.name,
+            "bytes": p.stat().st_size,
+            "kb": round(p.stat().st_size / 1024, 1),
+            "time": time.strftime("%Y-%m-%d %H:%M", time.localtime(p.stat().st_mtime)),
+            "mtime": int(p.stat().st_mtime),
+            "note": note,
+        })
+    if as_json:
+        # 给界面用的机器可读出口（别让 GUI 去解析上面那些人类可读的行）
+        print(json.dumps({"ok": True, "items": rows, "dir": str(BACKUP_ROOT)}, ensure_ascii=False))
+        return 0
+    for r in rows:
+        info(f"{r['name']}  {r['kb']} KB  {r['time']}  {r['note']}")
     write_backup_readme()
     return 0
 
@@ -2834,6 +2856,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--no-install", dest="no_install", action="store_true")
     ap.add_argument("--out", dest="out", default="")
     ap.add_argument("--include-test", dest="include_test", action="store_true")
+    ap.add_argument("--json", dest="as_json", action="store_true")
     ap.add_argument("-n", type=int, default=40)
     args = ap.parse_args(argv[1:])
 
@@ -2877,13 +2900,14 @@ def main(argv: list[str]) -> int:
         "info": lambda: cmd_info(),
         "caps": lambda: cmd_caps(),
         "backup": lambda: cmd_backup(args.note),
-        "backups": lambda: cmd_backups(),
+        "backups": lambda: cmd_backups(args.as_json),
         "restore": lambda: cmd_restore(args.from_archive),
         "rollback": lambda: cmd_rollback(),
         "sync-app": lambda: cmd_sync_app(args.force),
         "start": lambda: cmd_start(args.with_watchdog),
         "stop": lambda: cmd_stop(),
         "restart": lambda: cmd_restart(args.with_watchdog),
+        "restart-safe": lambda: cmd_restart_safe(),
         "logs": lambda: cmd_logs(args.n),
         "watchdog": lambda: cmd_watchdog([int(x) for x in args.main_pids.split(",") if x.strip()]),
     }
