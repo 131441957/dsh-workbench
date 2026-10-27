@@ -51,6 +51,14 @@
         hasPluginsEntry: buttons.includes('插件'),
         topbar: Boolean(document.getElementById('wb-topbar')),
         masked: Boolean(state.mainMasked),
+        // 原版侧栏是否还露着：任何 *_panelRow 在我们顶栏之外、且还占着可见矩形 → 说明没藏干净
+        sidebarVisibleRows: Array.from(document.querySelectorAll('[class*="_panelRow"]'))
+          .filter((el) => !el.closest('#wb-topbar'))
+          .filter((el) => {
+            const r = el.getBoundingClientRect()
+            return r.width > 0 && r.height > 0 && el.offsetParent !== null
+          })
+          .length,
         defaulted: Boolean(document.getElementById('wb-topbar')) && state.activeMarked ? true : false,
         buttons,
         topbarTabs: Array.from(document.querySelectorAll('#wb-topbar button.wb-tab')).map((b) => b.textContent),
@@ -220,11 +228,19 @@
   // 找“原侧栏”：从「设置」入口往上走，把所有“窄而高”的容器都收集起来（整条侧栏链路）
   const NARROW = 460
   const findSidebarChain = () => {
-    const anchor = findButton('设置')
+    // 锚点优先用「设置」按钮；但 0.2.1-rc.3 起设置被收进「更多」菜单、没有独立按钮，
+    // 这时退回“任意一个侧栏面板行”——否则整条原版侧栏都藏不掉，客户会看到原版左栏。
+    let anchor = findButton('设置')
+    if (!anchor) {
+      const rows = Array.from(document.querySelectorAll('[class*="_panelRow"]'))
+        .filter((el) => !el.closest('#wb-topbar'))
+      anchor = rows[0] || null
+    }
     if (!anchor) return []
     const chain = []
     let node = anchor
     for (let depth = 0; depth < 9 && node; depth += 1) {
+      if (node.id === 'wb-topbar') break
       const rect = node.getBoundingClientRect()
       if (rect.height > window.innerHeight * 0.5 && rect.width > 100 && rect.width < NARROW) chain.push(node)
       node = node.parentElement
