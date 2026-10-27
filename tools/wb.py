@@ -1697,6 +1697,14 @@ def cmd_pack(out: str = "", include_test: bool = False, force: bool = False) -> 
 
     (dest / "README.md").write_text(f"""# DSH 工作台 {ver}（分发包）
 
+> ## ⚠️ 本项目由 AI 生成
+>
+> 这里的代码与文档**绝大部分由 AI 编程助手（DeepSeek Harness 里的 agent）编写**，人类负责定需求、
+> 做判断、跑验收。**不是人类从零手写的项目**——请据此判断代码质量与风险。
+>
+> **English**: This project is largely AI-generated (written by an AI coding agent), with human
+> direction and acceptance testing.
+
 工作台 = 独立的 DSH 运行时副本 + 自带插件宿主，用来装/改插件而不碰你的主 harness。
 主 harness 只加一个**软依赖**接入层（`dsh-workbench-bridge`），可随时 `detach` 撤掉。
 

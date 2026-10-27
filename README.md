@@ -1,5 +1,16 @@
 # DSH 工作台（dsh-workbench）
 
+> ## ⚠️ 本项目由 AI 生成
+>
+> 这里的代码、文档、测试脚本**绝大部分由 AI 编程助手（DeepSeek Harness 里的 agent）编写**，
+> 人类负责定需求、做判断、跑验收和踩坑反馈。**不是人类从零手写的项目**——请据此判断代码质量与风险。
+>
+> 具体来说：仓库里所有提交的作者都是「小毛病」（AI 助手身份），提交信息里写明了每次改动的原因
+> 与验证方式；所有"已验证"的结论都附了可复现的命令，欢迎自己复核。
+>
+> **English**: This project is largely AI-generated (written by an AI coding agent), with human
+> direction, review, and acceptance testing. Treat it accordingly.
+
 一套**独立于主 harness** 的插件宿主：自己的 DSH 运行时副本、自己的 profile、自己的端口，
 插件与界面改造全在这里做，主 harness 只保留一个**软依赖**接入层，可随时摘掉。
 
